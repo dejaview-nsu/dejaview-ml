@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W", "I", "B", "UP", "SIM", "C4", "PIE", "RET", "PTH", "N",
+    "RUF", "PL", "ARG", "ERA", "PERF", "FBT", "TRY", "EM",
+]
+# RUF001-003: кириллица в строках и комментариях - не опечатка.
+# TRY003, EM101, EM102: сообщения исключений пишем прямо в raise, так читается проще.
+# TRY400: ожидаемые ошибки показываем пользователю сообщением, трассировка ему не нужна.
+ignore = ["RUF001", "RUF002", "RUF003", "TRY003", "EM101", "EM102", "TRY400"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLR2004", "ARG", "FBT"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
