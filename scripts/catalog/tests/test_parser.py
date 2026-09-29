@@ -16,7 +16,7 @@ from scripts.catalog.movies.parser import (
     parse_runtime,
 )
 from scripts.catalog.movies.rejection import MovieRejectedError, RejectReason
-from tests.catalog.samples import movie_details
+from scripts.catalog.tests.samples import movie_details
 
 
 def test_parse_movie_collects_all_card_fields():

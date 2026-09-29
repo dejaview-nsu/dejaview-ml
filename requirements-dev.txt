@@ -1,3 +1,0 @@
--r scripts/catalog/requirements.txt
-pytest>=8
-ruff>=0.6

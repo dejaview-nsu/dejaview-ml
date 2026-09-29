@@ -15,5 +15,9 @@ ignore = ["RUF001", "RUF002", "RUF003", "TRY003", "EM101", "EM102", "TRY400"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["PLR2004", "ARG", "FBT"]
 
+# Пакет импортируется как scripts.catalog от корня репозитория, а конфиг лежит внутри него.
+[tool.ruff.lint.isort]
+known-first-party = ["scripts"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

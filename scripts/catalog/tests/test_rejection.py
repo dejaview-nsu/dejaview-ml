@@ -1,7 +1,7 @@
 import pytest
 
 from scripts.catalog.movies.rejection import RejectReason, listing_rejection_reason
-from tests.catalog.samples import discover_item
+from scripts.catalog.tests.samples import discover_item
 
 
 @pytest.mark.parametrize(

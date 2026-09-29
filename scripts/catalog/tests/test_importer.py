@@ -11,8 +11,8 @@ from scripts.catalog.importer import MAX_CONSECUTIVE_FAILURES, CatalogAbortError
 from scripts.catalog.movies.rejection import RejectReason
 from scripts.catalog.report import build_report, format_report
 from scripts.catalog.storage.catalog_store import CatalogStore
+from scripts.catalog.tests.samples import discover_item, movie_details
 from scripts.catalog.tmdb.errors import TmdbNotFoundError, TmdbUnavailableError
-from tests.catalog.samples import discover_item, movie_details
 
 TODAY = date(2026, 9, 26)
 

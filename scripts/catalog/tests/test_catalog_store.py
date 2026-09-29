@@ -8,7 +8,7 @@ from scripts.catalog.movies.parser import parse_movie
 from scripts.catalog.movies.rejection import RejectReason
 from scripts.catalog.storage.catalog_store import MAX_ERROR_TEXT_LENGTH, SAVE_EVERY_CHANGES, CatalogStore
 from scripts.catalog.storage.json_files import CatalogFileError, write_json_atomically
-from tests.catalog.samples import movie_details
+from scripts.catalog.tests.samples import movie_details
 
 DUPLICATE_CANDIDATE = {"movie_id": 1, "priority": 1, "source_bucket": "a"}
 

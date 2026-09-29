@@ -5,8 +5,8 @@ import pytest
 from scripts.catalog.candidates.discovery import CandidateDiscovery, bucket_quota, build_decades, interleave
 from scripts.catalog.candidates.model import Candidate, CandidateStatus, Priority
 from scripts.catalog.movies.rejection import RejectReason
+from scripts.catalog.tests.samples import discover_item
 from scripts.catalog.tmdb.errors import TmdbRequestError
-from tests.catalog.samples import discover_item
 
 COMEDY = 35
 

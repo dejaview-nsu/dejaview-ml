@@ -12,7 +12,7 @@ from scripts.catalog.storage.records import (
     movie_id_of,
     movie_to_json,
 )
-from tests.catalog.samples import movie_details
+from scripts.catalog.tests.samples import movie_details
 
 
 def test_movie_to_json_uses_iso_date_and_plain_people():
