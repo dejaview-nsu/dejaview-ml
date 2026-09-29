@@ -25,6 +25,7 @@ BASE_BACKOFF_SECONDS = 1.0
 MAX_BACKOFF_SECONDS = 30.0
 MAX_DISCOVER_PAGE = 500
 ERROR_BODY_PREVIEW_LENGTH = 200
+PAYLOAD_TYPE_NAMES = {dict: "JSON-объект", list: "JSON-список"}
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,10 @@ class TmdbClient:
             raise TmdbRequestError("В ответе /genre/movie/list нет списка genres")
         return genres
 
+    def get_countries(self) -> list[dict[str, Any]]:
+        """Страны ISO 3166-1, в native_name название на русском, если оно есть в TMDB."""
+        return self._get("/configuration/countries", {"language": LANGUAGE}, list)
+
     def discover_movies(
         self,
         genre_id: int,
@@ -92,12 +97,13 @@ class TmdbClient:
         }
         return self._get("/discover/movie", params)
 
-    def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+    def _get(self, path: str, params: dict[str, str], payload_type: type = dict) -> Any:
+        """payload_type - dict или list, каким JSON-значением должен быть ответ."""
         last_problem = ""
         for attempt in range(1, MAX_ATTEMPTS + 1):
             self._rate_limiter.wait()
             try:
-                return self._request_once(path, params, attempt)
+                return self._request_once(path, params, attempt, payload_type)
             except _RetryableError as error:
                 last_problem = error.problem
                 if attempt < MAX_ATTEMPTS:
@@ -107,7 +113,7 @@ class TmdbClient:
                     self._rate_limiter.pause(error.delay)
         raise TmdbUnavailableError(f"{path}: TMDB недоступен после {MAX_ATTEMPTS} попыток, {last_problem}")
 
-    def _request_once(self, path: str, params: dict[str, str], attempt: int) -> dict[str, Any]:
+    def _request_once(self, path: str, params: dict[str, str], attempt: int, payload_type: type) -> Any:
         try:
             response = self._session.get(
                 API_BASE_URL + path,
@@ -120,7 +126,7 @@ class TmdbClient:
 
         match response.status_code:
             case HTTPStatus.OK:
-                return parse_json_object(response, path)
+                return parse_json_payload(response, path, payload_type)
             case HTTPStatus.UNAUTHORIZED:
                 raise TmdbAuthError("TMDB отклонил ключ (401): проверьте TMDB_ACCESS_TOKEN / TMDB_API_KEY")
             case HTTPStatus.NOT_FOUND:
@@ -154,11 +160,12 @@ def retry_after_delay(response: requests.Response) -> float | None:
     return min(seconds, MAX_BACKOFF_SECONDS) if seconds >= 0 else None
 
 
-def parse_json_object(response: requests.Response, path: str) -> dict[str, Any]:
+def parse_json_payload(response: requests.Response, path: str, payload_type: type) -> Any:
     try:
         payload = response.json()
     except ValueError:
         raise TmdbRequestError(f"{path}: ответ TMDB не является JSON") from None
-    if not isinstance(payload, dict):
-        raise TmdbRequestError(f"{path}: ожидался JSON-объект, получено {type(payload).__name__}")
+    if not isinstance(payload, payload_type):
+        expected = PAYLOAD_TYPE_NAMES[payload_type]
+        raise TmdbRequestError(f"{path}: ожидался {expected}, получено {type(payload).__name__}")
     return payload

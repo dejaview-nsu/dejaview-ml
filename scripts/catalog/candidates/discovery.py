@@ -9,7 +9,9 @@ from itertools import zip_longest
 from typing import Any
 
 from scripts.catalog.candidates.model import Candidate, CandidateStatus, Priority
-from scripts.catalog.json_values import as_dict, as_int, as_list, as_positive_int, clean_text
+from scripts.catalog.json_values import as_dict, as_int, as_list, as_positive_int
+from scripts.catalog.movies.model import Genre
+from scripts.catalog.movies.parser import parse_genres
 from scripts.catalog.movies.rejection import listing_rejection_reason
 from scripts.catalog.tmdb.client import MAX_DISCOVER_PAGE, TmdbClient
 from scripts.catalog.tmdb.errors import TmdbRequestError
@@ -18,12 +20,6 @@ from scripts.catalog.tmdb.errors import TmdbRequestError
 CANDIDATE_POOL_FACTOR = 2
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class Genre:
-    genre_id: int
-    name: str
 
 
 @dataclass(frozen=True)
@@ -64,17 +60,8 @@ class CandidateDiscovery:
         return interleave([self._scan_bucket(bucket, seen_ids, quota) for bucket in buckets])
 
     def _build_buckets(self) -> list[Bucket]:
-        genres = self._fetch_genres()
+        genres = parse_genres(self._client.get_genres())
         return [Bucket(genre, decade) for decade in build_decades(self._year_from, self._today) for genre in genres]
-
-    def _fetch_genres(self) -> list[Genre]:
-        genres = []
-        for item in map(as_dict, self._client.get_genres()):
-            genre_id = as_int(item.get("id"))
-            name = clean_text(item.get("name"))
-            if genre_id is not None and name is not None:
-                genres.append(Genre(genre_id, name))
-        return genres
 
     def _scan_bucket(self, bucket: Bucket, seen_ids: set[int], quota: int) -> list[Candidate]:
         """Идёт по выдаче корзины, пока не наберёт quota подходящих фильмов. seen_ids пополняется."""
@@ -99,7 +86,7 @@ class CandidateDiscovery:
         while page <= min(total_pages, MAX_DISCOVER_PAGE):
             try:
                 payload = self._client.discover_movies(
-                    bucket.genre.genre_id,
+                    bucket.genre.id,
                     bucket.decade.released_from,
                     bucket.decade.released_to,
                     self._min_vote_count,

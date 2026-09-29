@@ -1,7 +1,7 @@
 from enum import StrEnum
 from typing import Any
 
-from scripts.catalog.json_values import clean_text
+from scripts.catalog.json_values import as_tmdb_path, clean_text
 
 
 class RejectReason(StrEnum):
@@ -20,8 +20,7 @@ class MovieRejectedError(Exception):
 
 
 def extract_poster_path(item: dict[str, Any]) -> str | None:
-    path = clean_text(item.get("poster_path"))
-    return path if path is not None and path.startswith("/") else None
+    return as_tmdb_path(item.get("poster_path"))
 
 
 def listing_rejection_reason(item: dict[str, Any]) -> RejectReason | None:

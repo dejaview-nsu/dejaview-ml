@@ -1,13 +1,16 @@
 """Сборка каталога: очередь кандидатов -> TMDB -> JSON, с продолжением после обрыва."""
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from functools import cached_property
 
 from scripts.catalog.candidates.discovery import CandidateDiscovery
 from scripts.catalog.candidates.model import CandidateStatus
 from scripts.catalog.candidates.priority_list import build_manual_candidates
 from scripts.catalog.movies.model import Movie
-from scripts.catalog.movies.parser import MovieDataError, parse_movie
+from scripts.catalog.movies.parser import MovieDataError, parse_country_names, parse_movie
 from scripts.catalog.movies.rejection import MovieRejectedError, RejectReason
 from scripts.catalog.storage.catalog_store import CatalogStore
 from scripts.catalog.tmdb.client import TmdbClient
@@ -37,13 +40,13 @@ class RunSummary:
         return self.total_movies >= self.target_size
 
 
-def fetch_movie(client: TmdbClient, movie_id: int, poster_size: str) -> Movie:
-    """Переиспользуется утилитой индексации (#17650)."""
+def fetch_movie(client: TmdbClient, movie_id: int, country_names: Mapping[str, str]) -> Movie:
+    """Переиспользуется утилитой индексации (#17650). country_names - parse_country_names(client.get_countries())."""
     try:
         details = client.get_movie(movie_id)
     except TmdbNotFoundError:
         raise MovieRejectedError(movie_id, RejectReason.NOT_FOUND) from None
-    return parse_movie(details, movie_id, poster_size)
+    return parse_movie(details, movie_id, country_names, datetime.now(UTC))
 
 
 class CatalogImporter:
@@ -53,12 +56,10 @@ class CatalogImporter:
         store: CatalogStore,
         discovery: CandidateDiscovery,
         target_size: int,
-        poster_size: str,
     ) -> None:
         self._client = client
         self._store = store
         self._discovery = discovery
-        self._poster_size = poster_size
         self._summary = RunSummary(target_size)
         self._attempted_ids: set[int] = set()
         self._failure_streak = 0
@@ -108,9 +109,16 @@ class CatalogImporter:
             self._count(status)
             self._track_failure_streak(status)
 
+    @cached_property
+    def _country_names(self) -> dict[str, str]:
+        """Запрашивается один раз и только когда есть что загружать."""
+        return parse_country_names(self._client.get_countries())
+
     def _process_candidate(self, movie_id: int) -> CandidateStatus:
+        # До try: сбой справочника стран - не сбой этого фильма.
+        country_names = self._country_names
         try:
-            movie = fetch_movie(self._client, movie_id, self._poster_size)
+            movie = fetch_movie(self._client, movie_id, country_names)
         except MovieRejectedError as rejection:
             self._store.mark_rejected(movie_id, rejection.reason)
             logger.debug("Фильм %d отклонён: %s", movie_id, rejection.reason)
@@ -127,7 +135,7 @@ class CatalogImporter:
             self._summary.total_movies + 1,
             self._summary.target_size,
             movie.movie_id,
-            movie.title_ru,
+            movie.title,
             year,
         )
         return CandidateStatus.IMPORTED

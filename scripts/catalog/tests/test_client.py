@@ -202,3 +202,18 @@ def test_get_genres_requires_list():
     client, _, _ = make_client(FakeResponse(200, {"genres": None}))
     with pytest.raises(TmdbRequestError):
         client.get_genres()
+
+
+def test_get_countries_asks_for_russian_names():
+    countries = [{"iso_3166_1": "US", "english_name": "United States of America", "native_name": "США"}]
+    client, session, _ = make_client(FakeResponse(200, countries))
+
+    assert client.get_countries() == countries
+    assert session.calls[0]["url"].endswith("/configuration/countries")
+    assert session.calls[0]["params"]["language"] == "ru-RU"
+
+
+def test_get_countries_requires_list():
+    client, _, _ = make_client(FakeResponse(200, {"countries": []}))
+    with pytest.raises(TmdbRequestError, match="JSON-список"):
+        client.get_countries()

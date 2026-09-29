@@ -4,17 +4,14 @@ from dataclasses import replace
 import pytest
 
 from scripts.catalog.candidates.model import Candidate, CandidateStatus, Priority
-from scripts.catalog.movies.parser import parse_movie
 from scripts.catalog.movies.rejection import RejectReason
 from scripts.catalog.storage.catalog_store import MAX_ERROR_TEXT_LENGTH, SAVE_EVERY_CHANGES, CatalogStore
 from scripts.catalog.storage.json_files import CatalogFileError, write_json_atomically
-from scripts.catalog.tests.samples import movie_details
+from scripts.catalog.storage.records import movie_to_json
+from scripts.catalog.tests.samples import sample_movie
 
 DUPLICATE_CANDIDATE = {"movie_id": 1, "priority": 1, "source_bucket": "a"}
-
-
-def sample_movie(movie_id: int = 550):
-    return parse_movie(movie_details(movie_id), movie_id, "w500")
+DUPLICATE_MOVIE = movie_to_json(sample_movie(1))
 
 
 def discovered(movie_id: int, bucket: str = "a") -> Candidate:
@@ -56,10 +53,10 @@ def test_files_keep_cyrillic_readable(tmp_path):
 def test_save_movie_twice_updates_instead_of_duplicating(tmp_path):
     store = CatalogStore.open(tmp_path)
     store.save_movie(sample_movie())
-    store.save_movie(replace(sample_movie(), title_ru="Новое название"))
+    store.save_movie(replace(sample_movie(), title="Новое название"))
 
     assert store.movie_count() == 1
-    assert store.movies()[0]["title_ru"] == "Новое название"
+    assert store.movies()[0]["title"] == "Новое название"
 
 
 def test_movies_are_sorted_by_id(tmp_path):
@@ -147,8 +144,8 @@ def test_autosaves_every_n_changes(tmp_path):
     ("file_name", "content", "message"),
     [
         ("movies.json", "[1]", "не является объектом"),
-        ("movies.json", '[{"title_ru": "Без id"}]', "movie_id"),
-        ("movies.json", '[{"movie_id": 1}, {"movie_id": 1}]', "дважды"),
+        ("movies.json", '[{"movie_id": 1, "title_ru": "Старый формат"}]', "таблицей movies"),
+        ("movies.json", [DUPLICATE_MOVIE, DUPLICATE_MOVIE], "дважды"),
         ("candidates.json", '[{"movie_id": 1}]', "priority"),
         ("candidates.json", [DUPLICATE_CANDIDATE, DUPLICATE_CANDIDATE], "дважды"),
     ],

@@ -110,7 +110,7 @@ def collect_catalog(store: CatalogStore, settings: Settings, today: date) -> Run
         logger.info("Приоритетных фильмов в списке: %d", len(priority_ids))
     client = TmdbClient(RateLimiter(settings.requests_per_second), settings.tmdb_access_token, settings.tmdb_api_key)
     discovery = CandidateDiscovery(client, settings.year_from, settings.min_vote_count, today)
-    importer = CatalogImporter(client, store, discovery, settings.target_size, settings.poster_size)
+    importer = CatalogImporter(client, store, discovery, settings.target_size)
     return importer.run(priority_ids)
 
 

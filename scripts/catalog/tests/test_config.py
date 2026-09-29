@@ -4,7 +4,6 @@ import pytest
 
 from scripts.catalog.config import (
     DEFAULT_OUTPUT_DIR,
-    DEFAULT_POSTER_SIZE,
     DEFAULT_TARGET_SIZE,
     ConfigError,
     load_settings,
@@ -18,7 +17,6 @@ ALL_VARIABLES = (
     "CATALOG_MIN_VOTE_COUNT",
     "CATALOG_YEAR_FROM",
     "TMDB_REQUESTS_PER_SECOND",
-    "TMDB_POSTER_SIZE",
     "CATALOG_PRIORITY_IDS_FILE",
 )
 
@@ -39,7 +37,6 @@ def test_defaults(env_file):
     assert settings.tmdb_api_key is None
     assert settings.output_dir == DEFAULT_OUTPUT_DIR
     assert settings.target_size == DEFAULT_TARGET_SIZE
-    assert settings.poster_size == DEFAULT_POSTER_SIZE
     assert settings.priority_ids_file is None
 
 
@@ -89,7 +86,6 @@ def test_missing_env_file(tmp_path):
         ("TMDB_REQUESTS_PER_SECOND", "0"),
         ("TMDB_REQUESTS_PER_SECOND", "100"),
         ("TMDB_REQUESTS_PER_SECOND", "быстро"),
-        ("TMDB_POSTER_SIZE", "huge"),
     ],
 )
 def test_invalid_values(env_file, monkeypatch, name, value):

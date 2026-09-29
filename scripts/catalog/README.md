@@ -1,7 +1,9 @@
 # Сбор каталога из TMDB
 
 Скрипт `scripts/catalog/` отбирает фильмы, забирает их метаданные из TMDB и складывает в JSON-файл
-со списком фильмов, ключ фильма `movie_id`. Основной БД в проекте пока нет, поэтому каталог живёт в файле. Видеофайлы скрипт не трогает.
+со списком фильмов, ключ фильма `movie_id`. Запись фильма - строка таблицы `movies` из
+[контракта БД](https://github.com/dejaview-nsu/dejaview-docs/blob/main/contracts/db-schema.md#каталог-фильмов).
+Основной БД в проекте пока нет, поэтому каталог живёт в файле. Видеофайлы скрипт не трогает.
 
 ## Запуск
 
@@ -43,7 +45,6 @@ python -m scripts.catalog
 | `CATALOG_MIN_VOTE_COUNT` | нет | `200` | минимум голосов на TMDB: отсекает безвестные фильмы без метаданных |
 | `CATALOG_YEAR_FROM` | нет | `1950` | с какого года выпуска отбирать фильмы |
 | `TMDB_REQUESTS_PER_SECOND` | нет | `20` | ограничение частоты запросов к TMDB, не больше 50 |
-| `TMDB_POSTER_SIZE` | нет | `w500` | размер постера в ссылке на CDN TMDB: `w92`...`w780` или `original` |
 | `CATALOG_OUTPUT_DIR` | нет | `scripts/catalog/output` | папка для `movies.json` и `candidates.json` |
 | `CATALOG_PRIORITY_IDS_FILE` | нет | | файл с movie_id фильмов, которые берутся первыми, см. [Приоритетные фильмы](#приоритетные-фильмы) |
 
@@ -55,8 +56,9 @@ python -m scripts.catalog
 3. В каталог не попадают фильмы без постера, без русского названия или без русского описания.
    Русское название проверяется по переводам TMDB: TMDB подставляет оригинальное название, если перевода нет.
 
-На фильм уходит один запрос: детали, `credits` и `release_dates` приходят вместе через `append_to_response`.
-Постер хранится ссылкой на CDN TMDB, файл не скачивается.
+На фильм уходит один запрос: детали, `credits`, `release_dates` и `translations` приходят вместе через
+`append_to_response`. Ещё один запрос за запуск - справочник стран `/configuration/countries` ради русских названий.
+Постер и фото актёров хранятся путём на CDN TMDB (`/abc.jpg`), файлы не скачиваются.
 
 ## Приоритетные фильмы
 
@@ -112,32 +114,48 @@ CATALOG_PRIORITY_IDS_FILE=scripts/catalog/priority_ids.txt
 
 ## Что получается на выходе
 
-`movies.json`: список фильмов, отсортированный по `movie_id`. Пример записи:
+`movies.json`: список фильмов, отсортированный по `movie_id`. Ключи записи - колонки таблицы `movies`
+из [контракта](https://github.com/dejaview-nsu/dejaview-docs/blob/main/contracts/db-schema.md#каталог-фильмов),
+так что файл загружается в БД построчно через `INSERT ... ON CONFLICT (movie_id) DO UPDATE`. Пример записи:
 
 ```json
 {
   "movie_id": 550,
-  "title_ru": "Бойцовский клуб",
+  "title": "Бойцовский клуб",
   "original_title": "Fight Club",
   "release_date": "1999-10-15",
   "age_rating": "18+",
-  "poster_url": "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
-  "overview_ru": "Сотрудник страховой компании страдает хронической бессонницей...",
-  "runtime_minutes": 139,
-  "country_codes": ["US", "DE"],
-  "genres": ["драма", "триллер"],
-  "directors": [{"person_id": 7467, "name": "David Fincher"}],
-  "writers": [{"person_id": 7468, "name": "Jim Uhls"}],
-  "composers": [{"person_id": 1060, "name": "Dust Brothers"}],
-  "producers": [{"person_id": 7474, "name": "Art Linson"}],
-  "actors": [{"person_id": 819, "name": "Edward Norton", "character": "The Narrator"}]
+  "poster_path": "/66RvLrRJTm4J8l3uHXWF09AICol.jpg",
+  "runtime_min": 139,
+  "overview": "Сотрудник страховой компании страдает хронической бессонницей...",
+  "genres": [{"id": 18, "name": "драма"}, {"id": 53, "name": "триллер"}],
+  "countries": [{"code": "DE", "name": "Германия"}, {"code": "US", "name": "Соединенные Штаты"}],
+  "crew": [
+    {"person_id": 7467, "name": "Дэвид Финчер", "role": "director"},
+    {"person_id": 7469, "name": "Джим Улс", "role": "writer"},
+    {"person_id": 7477, "name": "John King", "role": "composer"},
+    {"person_id": 1254, "name": "Art Linson", "role": "producer"}
+  ],
+  "actors": [
+    {"person_id": 819, "name": "Эдвард Нортон", "character": "Narrator", "profile_path": "/8nytsqL59SFJTVYVrN72k6qkGgJ.jpg"}
+  ],
+  "cached_at": "2026-09-29T04:11:50+00:00"
 }
 ```
 
-- `age_rating`: 0+/6+/12+/16+/18+ или `null`, если в TMDB нет российского рейтинга.
-- `release_date`, `runtime_minutes`: `null`, если в TMDB не заполнены.
-- `country_codes`: коды ISO 3166-1, потому что TMDB отдаёт названия стран только по-английски.
-- `actors`: до 30 человек в порядке титров.
+- `title`: русское название, без него фильм в каталог не попадает.
+- `release_date`, `age_rating`, `runtime_min`: `null`, если в TMDB не заполнены. `age_rating` - 0+/6+/12+/16+/18+,
+  только российский рейтинг.
+- `poster_path`: путь на CDN TMDB, URL с нужным размером собирает backend.
+- `countries`: код ISO 3166-1 и русское название из справочника TMDB. Если русского нет, например у `SU`,
+  остаётся английское.
+- `crew`: режиссёры, сценаристы, композиторы, продюсеры в этом порядке. Человек с двумя ролями встречается дважды.
+- `actors`: до 30 человек в порядке титров, `character` и `profile_path` могут быть `null`.
+- `cached_at`: когда метаданные получены из TMDB, UTC. `indexed_at` скрипт не пишет, его ставит индексация.
+- Пустые списки - `[]`, пустых строк нет.
+
+Если `movies.json` собран версией скрипта со старым форматом записи, запуск остановится с ошибкой
+«поля не совпадают с таблицей movies». Удалите папку `output/` и соберите каталог заново.
 
 `candidates.json`: служебная очередь отбора со статусом и причиной отказа по каждому рассмотренному фильму.
 За счёт неё работает продолжение после обрыва. Удалите её, если нужно начать отбор заново,

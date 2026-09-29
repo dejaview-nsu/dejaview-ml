@@ -1,10 +1,13 @@
 """Отчёт о полноте каталога: входные данные для решения по риску #17300."""
 
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
 from scripts.catalog.candidates.model import CandidateStatus
+from scripts.catalog.json_values import as_dict, as_list
+from scripts.catalog.movies.model import CrewRole
 from scripts.catalog.movies.rejection import RejectReason
 from scripts.catalog.storage.catalog_store import CatalogStore
 
@@ -12,19 +15,20 @@ RISK_INCOMPLETE_THRESHOLD_PERCENT = 10
 RISK_NO_TRANSLATION_THRESHOLD_PERCENT = 5
 
 # Название, постер и описание не проверяются: без них фильм в каталог не попадает.
-OPTIONAL_FIELDS = {
+# crew проверяется по ролям: режиссёр может быть, а композитора нет.
+OPTIONAL_FIELDS: dict[str | CrewRole, str] = {
     "age_rating": "Возрастное ограничение (RU)",
     "release_date": "Год выпуска",
-    "runtime_minutes": "Длительность",
-    "country_codes": "Страны производства",
+    "runtime_min": "Длительность",
+    "countries": "Страны производства",
     "genres": "Жанры",
-    "directors": "Режиссёры",
-    "writers": "Сценаристы",
-    "composers": "Композиторы",
-    "producers": "Продюсеры",
+    CrewRole.DIRECTOR: "Режиссёры",
+    CrewRole.WRITER: "Сценаристы",
+    CrewRole.COMPOSER: "Композиторы",
+    CrewRole.PRODUCER: "Продюсеры",
     "actors": "Актёры",
 }
-RISK_FIELDS = ("poster_url", "overview_ru", "actors")
+RISK_FIELDS = ("poster_path", "overview", "actors")
 
 REJECT_REASON_LABELS = {
     RejectReason.NO_RUSSIAN_TITLE: "нет русского названия",
@@ -62,7 +66,7 @@ def build_report(store: CatalogStore) -> CompletenessReport:
         incomplete_movies=sum(_has_empty_field(movie, OPTIONAL_FIELDS) for movie in movies),
         risk_incomplete_movies=sum(_has_empty_field(movie, RISK_FIELDS) for movie in movies),
         missing_by_field={
-            label: sum(_is_empty(movie.get(field)) for movie in movies) for field, label in OPTIONAL_FIELDS.items()
+            label: sum(_is_missing(movie, field) for movie in movies) for field, label in OPTIONAL_FIELDS.items()
         },
         status_counts=Counter(candidate.status for candidate in candidates),
         reject_counts=Counter(
@@ -106,12 +110,15 @@ def _selection_lines(report: CompletenessReport) -> list[str]:
     return lines
 
 
-def _is_empty(value: Any) -> bool:
+def _is_missing(movie: dict[str, Any], field: str | CrewRole) -> bool:
+    if isinstance(field, CrewRole):
+        return not any(as_dict(member).get("role") == field for member in as_list(movie.get("crew")))
+    value = movie.get(field)
     return value is None or value in ("", [])
 
 
-def _has_empty_field(movie: dict[str, Any], fields: dict[str, str] | tuple[str, ...]) -> bool:
-    return any(_is_empty(movie.get(field)) for field in fields)
+def _has_empty_field(movie: dict[str, Any], fields: Iterable[str | CrewRole]) -> bool:
+    return any(_is_missing(movie, field) for field in fields)
 
 
 def _share(count: int, total: int) -> str:

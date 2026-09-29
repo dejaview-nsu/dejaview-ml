@@ -21,6 +21,12 @@ def clean_text(value: Any) -> str | None:
     return value.strip() or None
 
 
+def as_tmdb_path(value: Any) -> str | None:
+    """Путь картинки на CDN TMDB вида /abc.jpg. URL из него собирает backend."""
+    path = clean_text(value)
+    return path if path is not None and path.startswith("/") else None
+
+
 def as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 

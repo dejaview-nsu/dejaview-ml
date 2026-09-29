@@ -1,7 +1,6 @@
 """Настройки из переменных окружения и файла .env. Переменные окружения процесса важнее файла."""
 
 import os
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,8 +19,6 @@ DEFAULT_YEAR_FROM = 1950
 EARLIEST_YEAR = 1900
 DEFAULT_REQUESTS_PER_SECOND = 20.0
 MAX_REQUESTS_PER_SECOND = 50.0
-DEFAULT_POSTER_SIZE = "w500"
-POSTER_SIZE_PATTERN = re.compile(r"w\d+|original")
 
 T = TypeVar("T")
 
@@ -39,7 +36,6 @@ class Settings:
     min_vote_count: int
     year_from: int
     requests_per_second: float
-    poster_size: str
     priority_ids_file: Path | None
 
 
@@ -63,7 +59,6 @@ def load_settings(env_file: Path | None, current_year: int, *, require_tmdb_key:
             lambda value: 0 < value <= MAX_REQUESTS_PER_SECOND,
             f"числом больше 0 и не больше {MAX_REQUESTS_PER_SECOND:g}",
         ),
-        poster_size=_read_poster_size(),
         priority_ids_file=_read_path("CATALOG_PRIORITY_IDS_FILE"),
     )
 
@@ -99,13 +94,6 @@ def _read_number(name: str, default: T, parse: Callable[[str], T], is_valid: Cal
         value = None
     if value is None or not is_valid(value):
         raise ConfigError(f"{name} должно быть {rule}, получено: {raw_value!r}")
-    return value
-
-
-def _read_poster_size() -> str:
-    value = _read_text("TMDB_POSTER_SIZE") or DEFAULT_POSTER_SIZE
-    if not POSTER_SIZE_PATTERN.fullmatch(value):
-        raise ConfigError(f"TMDB_POSTER_SIZE должно быть вида w500 или original, получено: {value!r}")
     return value
 
 

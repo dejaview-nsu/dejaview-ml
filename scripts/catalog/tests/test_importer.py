@@ -1,7 +1,7 @@
 """Сквозные тесты сборки каталога: TMDB подменён, файлы пишутся во временную папку."""
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -11,7 +11,7 @@ from scripts.catalog.importer import MAX_CONSECUTIVE_FAILURES, CatalogAbortError
 from scripts.catalog.movies.rejection import RejectReason
 from scripts.catalog.report import build_report, format_report
 from scripts.catalog.storage.catalog_store import CatalogStore
-from scripts.catalog.tests.samples import discover_item, movie_details
+from scripts.catalog.tests.samples import COUNTRIES, COUNTRY_NAMES, discover_item, movie_details
 from scripts.catalog.tmdb.errors import TmdbNotFoundError, TmdbUnavailableError
 
 TODAY = date(2026, 9, 26)
@@ -20,13 +20,21 @@ TODAY = date(2026, 9, 26)
 class FakeTmdb:
     """movies[movie_id] - ответ деталей либо исключение, которое нужно бросить."""
 
-    def __init__(self, movies: dict, discover_pages: list[list[dict]]) -> None:
+    def __init__(self, movies: dict, discover_pages: list[list[dict]], countries=COUNTRIES) -> None:
         self.movies = movies
         self.discover_pages = discover_pages
+        self.countries = countries
         self.requested_movies: list[int] = []
+        self.country_requests = 0
 
     def get_genres(self):
         return [{"id": 1, "name": "драма"}]
+
+    def get_countries(self):
+        self.country_requests += 1
+        if isinstance(self.countries, Exception):
+            raise self.countries
+        return self.countries
 
     def discover_movies(self, genre_id, released_from, released_to, min_vote_count, page):
         results = self.discover_pages[page - 1] if page <= len(self.discover_pages) else []
@@ -57,7 +65,7 @@ def run_importer(output_dir, tmdb, target_size=3, priority_ids=()):
     """Как настоящий запуск: каждый раз открывает файлы с диска заново."""
     store = CatalogStore.open(output_dir)
     discovery = CandidateDiscovery(tmdb, year_from=2020, min_vote_count=0, today=TODAY)
-    summary = CatalogImporter(tmdb, store, discovery, target_size, "w500").run(list(priority_ids))
+    summary = CatalogImporter(tmdb, store, discovery, target_size).run(list(priority_ids))
     return summary, CatalogStore.open(output_dir)
 
 
@@ -77,33 +85,61 @@ def test_collects_target_and_skips_unsuitable(output_dir):
     assert candidate(store, 2).reject_reason is RejectReason.NO_RUSSIAN_TITLE
 
 
-def test_movies_file_is_readable_list_of_cards(output_dir):
+def test_movies_file_matches_movies_table(output_dir):
+    started_at = datetime.now(UTC).replace(microsecond=0)
     run_importer(output_dir, FakeTmdb(good_movies(550), listing(550)), target_size=1)
 
     movies = json.loads((output_dir / "movies.json").read_text(encoding="utf-8"))
+    cached_at = datetime.fromisoformat(movies[0].pop("cached_at"))
 
+    assert started_at <= cached_at <= datetime.now(UTC)
     assert movies == [
         {
             "movie_id": 550,
-            "title_ru": "Бойцовский клуб",
+            "title": "Бойцовский клуб",
             "original_title": "Fight Club",
             "release_date": "1999-10-15",
             "age_rating": "18+",
-            "poster_url": "https://image.tmdb.org/t/p/w500/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
-            "overview_ru": "Сотрудник страховой компании страдает хронической бессонницей.",
-            "runtime_minutes": 139,
-            "country_codes": ["US", "DE"],
-            "genres": ["драма", "триллер"],
-            "directors": [{"person_id": 7467, "name": "David Fincher"}],
-            "writers": [{"person_id": 7468, "name": "Jim Uhls"}],
-            "composers": [{"person_id": 1060, "name": "Dust Brothers"}],
-            "producers": [{"person_id": 7474, "name": "Art Linson"}],
+            "poster_path": "/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg",
+            "runtime_min": 139,
+            "overview": "Сотрудник страховой компании страдает хронической бессонницей.",
+            "genres": [{"id": 18, "name": "драма"}, {"id": 53, "name": "триллер"}],
+            "countries": [{"code": "US", "name": "США"}, {"code": "DE", "name": "Germany"}],
+            "crew": [
+                {"person_id": 7467, "name": "David Fincher", "role": "director"},
+                {"person_id": 7468, "name": "Jim Uhls", "role": "writer"},
+                {"person_id": 1060, "name": "Dust Brothers", "role": "composer"},
+                {"person_id": 7474, "name": "Art Linson", "role": "producer"},
+            ],
             "actors": [
-                {"person_id": 819, "name": "Edward Norton", "character": "The Narrator"},
-                {"person_id": 287, "name": "Brad Pitt", "character": "Tyler Durden"},
+                {
+                    "person_id": 819,
+                    "name": "Edward Norton",
+                    "character": "The Narrator",
+                    "profile_path": "/8nytsqL59SFJTVYVrN72k6qkGgJ.jpg",
+                },
+                {"person_id": 287, "name": "Brad Pitt", "character": "Tyler Durden", "profile_path": None},
             ],
         }
     ]
+
+
+def test_countries_are_requested_once_and_only_when_needed(output_dir):
+    tmdb = FakeTmdb(good_movies(1, 2, 3), listing(1, 2, 3))
+    run_importer(output_dir, tmdb)
+    assert tmdb.country_requests == 1
+
+    run_importer(output_dir, tmdb)
+    assert tmdb.country_requests == 1
+
+
+def test_country_list_failure_stops_run_without_blaming_movie(output_dir):
+    tmdb = FakeTmdb(good_movies(1), listing(1), countries=TmdbUnavailableError("503"))
+
+    with pytest.raises(TmdbUnavailableError):
+        run_importer(output_dir, tmdb, target_size=1)
+
+    assert candidate(CatalogStore.open(output_dir), 1).status is CandidateStatus.PENDING
 
 
 def test_rerun_does_not_duplicate_or_refetch(output_dir):
@@ -188,7 +224,7 @@ def test_aborts_on_consecutive_failures_and_keeps_progress(output_dir):
 
 def test_movies_added_elsewhere_count_toward_target(output_dir):
     store = CatalogStore.open(output_dir)
-    store.save_movie(fetch_movie(FakeTmdb(good_movies(7), []), 7, "w500"))
+    store.save_movie(fetch_movie(FakeTmdb(good_movies(7), []), 7, COUNTRY_NAMES))
     store.save()
     tmdb = FakeTmdb(good_movies(1, 2, 7), listing(7, 1, 2))
 

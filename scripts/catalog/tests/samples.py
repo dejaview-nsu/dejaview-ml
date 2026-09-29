@@ -1,7 +1,11 @@
 """Образцы ответов TMDB для тестов, по форме как настоящий /movie/{id}?append_to_response=..."""
 
 import copy
+from datetime import UTC, datetime
 from typing import Any
+
+from scripts.catalog.movies.model import Movie
+from scripts.catalog.movies.parser import parse_movie
 
 FIGHT_CLUB: dict[str, Any] = {
     "id": 550,
@@ -21,7 +25,13 @@ FIGHT_CLUB: dict[str, Any] = {
     "credits": {
         "cast": [
             {"id": 287, "name": "Brad Pitt", "character": "Tyler Durden", "order": 1},
-            {"id": 819, "name": "Edward Norton", "character": "The Narrator", "order": 0},
+            {
+                "id": 819,
+                "name": "Edward Norton",
+                "character": "The Narrator",
+                "order": 0,
+                "profile_path": "/8nytsqL59SFJTVYVrN72k6qkGgJ.jpg",
+            },
         ],
         "crew": [
             {"id": 7467, "name": "David Fincher", "job": "Director"},
@@ -52,12 +62,24 @@ FIGHT_CLUB: dict[str, Any] = {
     },
 }
 
+# Как /configuration/countries?language=ru-RU: у части стран русского названия нет.
+COUNTRIES: list[dict[str, Any]] = [
+    {"iso_3166_1": "US", "english_name": "United States of America", "native_name": "США"},
+    {"iso_3166_1": "DE", "english_name": "Germany", "native_name": ""},
+]
+COUNTRY_NAMES = {"US": "США"}
+CACHED_AT = datetime(2026, 9, 26, 12, 30, tzinfo=UTC)
+
 
 def movie_details(movie_id: int = 550, **overrides: Any) -> dict[str, Any]:
     details = copy.deepcopy(FIGHT_CLUB)
     details["id"] = movie_id
     details.update(overrides)
     return details
+
+
+def sample_movie(movie_id: int = 550, **overrides: Any) -> Movie:
+    return parse_movie(movie_details(movie_id, **overrides), movie_id, COUNTRY_NAMES, CACHED_AT)
 
 
 def discover_item(movie_id: int, **overrides: Any) -> dict[str, Any]:
