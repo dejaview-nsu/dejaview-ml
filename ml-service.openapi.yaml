@@ -1,0 +1,360 @@
+openapi: 3.0.3
+info:
+  title: DejaView ML-сервис (внутренний API)
+  version: 0.1.0
+  description: >-
+    Поиск по модальности для backend. Вызывается только backend по внутренней docker-сети,
+    наружу не публикуется. Описание, таймауты и поведение при недоступности -
+    contracts/backend-ml.md (#17626).
+servers:
+  - url: http://ml:8000
+    description: Пример. Адрес ML-сервиса задается конфигурацией backend.
+# Аутентификации нет: сервис доступен только во внутренней docker-сети, снаружи закрыт
+# (contracts/backend-ml.md, раздел 1).
+security: []
+tags:
+  - name: search
+    description: Поиск по модальности, ответ - movie_id по убыванию релевантности.
+  - name: health
+    description: Готовность моделей и доступность Qdrant.
+paths:
+  /v1/search/text:
+    post:
+      tags: [search]
+      operationId: searchText
+      summary: Поиск по текстовому описанию (не Sprint 1)
+      description: N = до 10 фильмов (#17152 п. 4.4).
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TextQuery'
+            example:
+              query: девушка в красном платье в толпе людей в черном
+      responses:
+        '200':
+          $ref: '#/components/responses/SearchOk'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableInput'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/search/image:
+    post:
+      tags: [search]
+      operationId: searchImage
+      summary: Поиск по изображению
+      description: >-
+        Тело - байты файла. JPG, JPEG, PNG, WEBP, до 10 МБ (#17153 п. 4.2). N = 1 (#17153 п. 6.1).
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          image/png:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          image/webp:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+      responses:
+        '200':
+          $ref: '#/components/responses/SearchOk'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableInput'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/search/video:
+    post:
+      tags: [search]
+      operationId: searchVideo
+      summary: Поиск по видеофрагменту
+      description: >-
+        Тело - байты файла. MP4, MOV, WEBM, до 30 с, до 50 МБ (#17154 п. 4.2). N = 1
+        (#17154 п. 6.1). Длительность и целостность файла проверяет ML-сервис.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          video/mp4:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          video/quicktime:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          video/webm:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+      responses:
+        '200':
+          $ref: '#/components/responses/SearchOk'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableInput'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/search/audio:
+    post:
+      tags: [search]
+      operationId: searchAudio
+      summary: Поиск по аудиофрагменту (не Sprint 1)
+      description: >-
+        Тело - байты файла. MP3, WAV, OGG, M4A, до 10 с, до 20 МБ (#17155 п. 4.2). N = 1
+        (#17155 п. 6.1). Длительность и целостность файла проверяет ML-сервис.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          audio/mpeg:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          audio/wav:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          audio/ogg:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+          audio/mp4:
+            schema:
+              $ref: '#/components/schemas/BinaryFile'
+      responses:
+        '200':
+          $ref: '#/components/responses/SearchOk'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableInput'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /health:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Готовность к поиску
+      description: >-
+        200 - все включенные модели ready и Qdrant ok, иначе 503. Без инференса
+        (#17098 п. 5.1, #17637 п. 7).
+      responses:
+        '200':
+          description: Сервис готов к поиску.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+                models:
+                  text: disabled
+                  image: ready
+                  video: ready
+                  audio: disabled
+                qdrant: ok
+        '503':
+          description: Сервис не готов - модель загружается или упала, либо Qdrant недоступен.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: unavailable
+                models:
+                  text: disabled
+                  image: ready
+                  video: loading
+                  audio: disabled
+                qdrant: ok
+components:
+  parameters:
+    RequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: >-
+        Идентификатор запроса, пишется в журнал ML-сервиса (#17098 п. 5.2). Backend передает
+        всегда; запрос без него (curl) ML-сервис не отклоняет.
+      schema:
+        type: string
+      example: 9f1c2e04-5b7a-4d0e-8a61-3f2b9c7d1e55
+  schemas:
+    TextQuery:
+      type: object
+      required: [query]
+      additionalProperties: false
+      properties:
+        query:
+          type: string
+          minLength: 3
+          maxLength: 250
+          description: Текст запроса на русском или английском (#17152 п. 3.3, 3.4).
+    BinaryFile:
+      type: string
+      format: binary
+      description: Байты файла без обертки. МБ - 1 048 576 байт.
+    SearchResult:
+      type: object
+      required: [movie_ids]
+      additionalProperties: false
+      properties:
+        movie_ids:
+          type: array
+          description: >-
+            Ключи фильмов (#17241) по убыванию релевантности, без повторов. Не больше N;
+            пустой список - нормальный ответ, в том числе когда все ниже порога релевантности
+            (настройка ML-сервиса, по умолчанию выключен). Score не передается (#17392 п. 5).
+          maxItems: 10
+          uniqueItems: true
+          items:
+            type: integer
+            format: int64
+    MlError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - FILE_TOO_LARGE
+            - UNSUPPORTED_MEDIA_TYPE
+            - INVALID_QUERY
+            - FILE_CORRUPTED
+            - DURATION_TOO_LONG
+            - NOT_READY
+            - QDRANT_UNAVAILABLE
+            - INTERNAL_ERROR
+        message:
+          type: string
+          description: Диагностика для журнала backend. Клиенту не передается (#17094 п. 4.3).
+    Health:
+      type: object
+      required: [status, models, qdrant]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        models:
+          type: object
+          required: [text, image, video, audio]
+          properties:
+            text:
+              $ref: '#/components/schemas/ModelState'
+            image:
+              $ref: '#/components/schemas/ModelState'
+            video:
+              $ref: '#/components/schemas/ModelState'
+            audio:
+              $ref: '#/components/schemas/ModelState'
+        qdrant:
+          type: string
+          enum: [ok, unavailable]
+          description: ok - Qdrant отвечает и четыре коллекции есть.
+    ModelState:
+      type: string
+      enum: [loading, ready, failed, disabled]
+      description: disabled - модальность выключена конфигурацией (#17637 п. 3).
+  responses:
+    SearchOk:
+      description: Список movie_id по убыванию релевантности.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/SearchResult'
+          examples:
+            found:
+              summary: Найден фильм
+              value:
+                movie_ids: [603]
+            empty:
+              summary: Ничего не найдено
+              value:
+                movie_ids: []
+    PayloadTooLarge:
+      description: Тело больше лимита модальности.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MlError'
+          example:
+            code: FILE_TOO_LARGE
+            message: body is 12582912 bytes, limit 10485760
+    UnsupportedMediaType:
+      description: Content-Type не из списка модальности.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MlError'
+          example:
+            code: UNSUPPORTED_MEDIA_TYPE
+            message: image/gif is not supported
+    UnprocessableInput:
+      description: >-
+        INVALID_QUERY - текст вне 3-250 символов или JSON не разбирается; FILE_CORRUPTED - файл
+        не декодируется; DURATION_TOO_LONG - видео длиннее 30 с, аудио длиннее 10 с.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MlError'
+          examples:
+            corrupted:
+              summary: Файл не декодируется
+              value:
+                code: FILE_CORRUPTED
+                message: cannot decode image
+            tooLong:
+              summary: Видео длиннее 30 с
+              value:
+                code: DURATION_TOO_LONG
+                message: video is 41.2 s, limit 30 s
+    InternalError:
+      description: Непредвиденный сбой. Backend отвечает клиенту 503 SEARCH_UNAVAILABLE.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MlError'
+          example:
+            code: INTERNAL_ERROR
+            message: unexpected error
+    Unavailable:
+      description: >-
+        NOT_READY - модель модальности загружается или выключена; QDRANT_UNAVAILABLE - Qdrant не
+        отвечает. Backend отвечает клиенту 503 SEARCH_UNAVAILABLE.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/MlError'
+          examples:
+            notReady:
+              summary: Модель загружается
+              value:
+                code: NOT_READY
+                message: model video is loading
+            qdrant:
+              summary: Qdrant недоступен
+              value:
+                code: QDRANT_UNAVAILABLE
+                message: qdrant timeout
