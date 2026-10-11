@@ -2,6 +2,7 @@ import asyncio
 import io
 import struct
 import zlib
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -22,23 +23,41 @@ from dejaview_ml.storage import SchemaMismatch
 class TestEncoders(Encoders):
     __test__ = False
 
-    def __init__(self):
-        super().__init__(Settings(_env_file=None))
-        self.states.update(image="ready", video="ready")
+    def __init__(self, **settings):
+        super().__init__(Settings(_env_file=None, **settings))
+        self.states.update(
+            {kind: "ready" for kind, state in self.states.items() if state != "disabled"}
+        )
 
     def _encode_frames(self, modality, frames):
         return [1.0] + [0.0] * 511
 
+    def _encode_text(self, text, *, passage):
+        return [1.0] + [0.0] * 767
+
+    def _encode_audio(self, waveform):
+        return [1.0] + [0.0] * 511
+
 
 @pytest.fixture
-def api():
-    encoders = TestEncoders()
-    store = AsyncMock()
-    store.healthy.return_value = True
-    store.search.return_value = [603]
-    app = create_app(Settings(_env_file=None), encoders, store)
-    with TestClient(app, raise_server_exceptions=False) as client:
-        yield client, encoders, store
+def make_api():
+    with ExitStack() as stack:
+
+        def make(**settings):
+            encoders = TestEncoders(**settings)
+            store = AsyncMock()
+            store.healthy.return_value = True
+            store.search.return_value = [603]
+            app = create_app(Settings(_env_file=None, **settings), encoders, store)
+            client = stack.enter_context(TestClient(app, raise_server_exceptions=False))
+            return client, encoders, store
+
+        yield make
+
+
+@pytest.fixture
+def api(make_api):
+    return make_api()
 
 
 def png():
@@ -116,19 +135,20 @@ def test_chunked_body_cannot_bypass_limit(api, monkeypatch):
     store.search.assert_not_called()
 
 
-@pytest.mark.parametrize("modality", ["text", "audio"])
-def test_disabled(api, modality):
-    client, _, _ = api
+@pytest.mark.parametrize("modality", ["image", "video", "text", "audio"])
+def test_disabled(make_api, modality):
+    client, _, store = make_api(**{f"{modality}_enabled": False})
     response = client.post(f"/v1/search/{modality}", content=b"unused")
     assert response.status_code == 503
     assert response.json()["code"] == "NOT_READY"
+    store.search.assert_not_called()
 
 
 def test_health_states_and_empty_search(api):
     client, encoders, store = api
     assert client.get("/health").json() == {
         "status": "ok",
-        "models": {"text": "disabled", "image": "ready", "video": "ready", "audio": "disabled"},
+        "models": {"text": "ready", "image": "ready", "video": "ready", "audio": "ready"},
         "qdrant": "ok",
     }
     for state in ("loading", "failed"):
