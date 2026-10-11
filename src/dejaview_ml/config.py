@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     top_k: int = Field(default=20, ge=1, le=1000)
     score_threshold: float | None = Field(default=None, ge=-1, le=1)
     ffmpeg_timeout_seconds: float = Field(default=10, gt=0)
+    body_read_timeout_seconds: float = Field(default=30, gt=0)
     torch_threads: int = Field(default=4, ge=1)
 
     def enabled(self, modality: str) -> bool:

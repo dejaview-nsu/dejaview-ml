@@ -58,6 +58,7 @@ def decode_image(data: bytes, content_type: str) -> Image.Image:
         UnidentifiedImageError,
         OSError,
         ValueError,
+        SyntaxError,
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
     ) as exc:

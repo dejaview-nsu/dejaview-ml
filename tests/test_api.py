@@ -1,5 +1,7 @@
 import asyncio
 import io
+import struct
+import zlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -45,6 +47,14 @@ def png():
     return out.getvalue()
 
 
+def png_with_bad_ztxt():
+    data = png()
+    body = b"Comment\x00\x01" + zlib.compress(b"text")
+    chunk = struct.pack(">I", len(body)) + b"zTXt" + body
+    chunk += struct.pack(">I", zlib.crc32(b"zTXt" + body))
+    return data[:-12] + chunk + data[-12:]
+
+
 def test_image_search_and_request_id(api, caplog):
     client, _, store = api
     with caplog.at_level("INFO"):
@@ -67,6 +77,7 @@ def test_image_search_and_request_id(api, caplog):
     [
         (b"", "image/png", 422, "FILE_CORRUPTED"),
         (b"garbage", "image/jpeg", 422, "FILE_CORRUPTED"),
+        (png_with_bad_ztxt(), "image/png", 422, "FILE_CORRUPTED"),
         (b"GIF89a", "image/gif", 415, "UNSUPPORTED_MEDIA_TYPE"),
         (png(), "image/jpeg", 415, "UNSUPPORTED_MEDIA_TYPE"),
     ],
@@ -187,6 +198,41 @@ async def test_overload_does_not_queue_and_health_remains_available():
             finally:
                 release.set()
             assert (await first).status_code == 200
+
+
+async def test_stalled_upload_times_out_without_occupying_inference():
+    store = AsyncMock()
+    store.healthy.return_value = True
+    store.search.return_value = [603]
+    started, never = asyncio.Event(), asyncio.Event()
+
+    async def stalled_body():
+        yield png()[:8]
+        started.set()
+        await never.wait()
+
+    settings = Settings(_env_file=None, body_read_timeout_seconds=0.5)
+    app = create_app(settings, TestEncoders(), store)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://ml"
+        ) as c:
+            stalled = asyncio.create_task(
+                c.post(
+                    "/v1/search/image",
+                    content=stalled_body(),
+                    headers={"Content-Type": "image/png"},
+                )
+            )
+            await asyncio.wait_for(started.wait(), timeout=5)
+            other = await c.post(
+                "/v1/search/image", content=png(), headers={"Content-Type": "image/png"}
+            )
+            assert other.status_code == 200
+            response = await asyncio.wait_for(stalled, timeout=5)
+            assert response.status_code == 422
+            assert response.json()["code"] == "FILE_CORRUPTED"
+    store.search.assert_awaited_once()
 
 
 async def test_schema_mismatch_aborts_startup_without_loading_models():

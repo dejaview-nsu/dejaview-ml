@@ -17,7 +17,9 @@ from dejaview_ml.storage import SchemaMismatch, VectorStore
 logger = logging.getLogger(__name__)
 
 
-async def read_body(request: Request, limit: int, *, text_query: bool = False) -> bytes:
+async def read_body(
+    request: Request, limit: int, timeout: float, *, text_query: bool = False
+) -> bytes:
     invalid = "INVALID_QUERY" if text_query else "FILE_CORRUPTED"
     oversized = (
         MlError(422, invalid, "JSON body exceeds 64 KiB")
@@ -35,10 +37,14 @@ async def read_body(request: Request, limit: int, *, text_query: bool = False) -
         if length > limit:
             raise oversized
     data = bytearray()
-    async for chunk in request.stream():
-        if len(data) + len(chunk) > limit:
-            raise oversized
-        data.extend(chunk)
+    try:
+        async with asyncio.timeout(timeout):
+            async for chunk in request.stream():
+                if len(data) + len(chunk) > limit:
+                    raise oversized
+                data.extend(chunk)
+    except TimeoutError as exc:
+        raise MlError(422, invalid, f"request body was not received within {timeout} s") from exc
     if not data:
         raise MlError(422, invalid, "empty request body")
     return bytes(data)
@@ -154,12 +160,17 @@ def create_app(
         content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if content_type not in MEDIA_TYPES[modality]:
             raise MlError(415, "UNSUPPORTED_MEDIA_TYPE", f"{content_type} is not supported")
+        data = await read_body(
+            request,
+            LIMITS[modality],
+            settings.body_read_timeout_seconds,
+            text_query=modality == "text",
+        )
+        query = parse_text_query(data) if modality == "text" else None
         if app.state.inference_lock.locked():
             raise MlError(503, "NOT_READY", "inference capacity is occupied; retry later")
         async with app.state.inference_lock:
-            data = await read_body(request, LIMITS[modality], text_query=modality == "text")
             if modality == "text":
-                query = parse_text_query(data)
                 vectors = await asyncio.to_thread(app.state.encoders.encode_text, query)
             else:
                 vectors = await asyncio.to_thread(
