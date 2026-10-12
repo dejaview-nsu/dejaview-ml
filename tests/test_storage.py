@@ -1,10 +1,11 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.http.models import QueryResponse
 
+import dejaview_ml.storage as storage
 from dejaview_ml.config import DIMENSIONS, Settings
 from dejaview_ml.errors import MlError
 from dejaview_ml.storage import SchemaMismatch, VectorStore, aggregate, point_id, point_payload
@@ -17,6 +18,14 @@ def test_metadata_and_stable_point_ids():
     for args in [("text", 603, 0), ("image", 603, None), ("image", 603, -1), ("video", True, 0)]:
         with pytest.raises(ValueError):
             point_payload(*args)
+
+
+@pytest.mark.parametrize(("key", "expected"), [(None, None), ("", None), ("secret", "secret")])
+def test_qdrant_api_key_is_optional(monkeypatch, key, expected):
+    client = Mock()
+    monkeypatch.setattr(storage, "AsyncQdrantClient", client)
+    VectorStore(Settings(_env_file=None, qdrant_api_key=key))
+    assert client.call_args.kwargs["api_key"] == expected
 
 
 def test_aggregation_sums_distinct_fragments_and_breaks_ties():

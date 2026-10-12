@@ -53,8 +53,10 @@ def aggregate(points: list[models.ScoredPoint], limit: int = 1) -> list[int]:
 class VectorStore:
     def __init__(self, settings: Settings, client: AsyncQdrantClient | None = None):
         self.settings = settings
+        api_key = settings.qdrant_api_key and settings.qdrant_api_key.get_secret_value()
         self.client = client or AsyncQdrantClient(
             url=settings.qdrant_url,
+            api_key=api_key or None,
             grpc_port=settings.qdrant_grpc_port,
             prefer_grpc=settings.qdrant_prefer_grpc,
             timeout=settings.qdrant_timeout_seconds,

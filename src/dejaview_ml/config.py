@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DIMENSIONS = {"text": 768, "image": 512, "video": 512, "audio": 512}
@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     qdrant_grpc_port: int = 6334
     qdrant_prefer_grpc: bool = True
     qdrant_timeout_seconds: int = Field(default=2, ge=1)
+    qdrant_api_key: SecretStr | None = None
     cache_dir: Path = Path(".cache/huggingface")
     local_files_only: bool = False
     device: Literal["auto", "cpu", "cuda", "mps"] = "auto"
