@@ -63,6 +63,8 @@ def test_values_from_env_file(env, monkeypatch):
         ("DATABASE_URL", " ", "Не задан DATABASE_URL"),
         ("TMDB_REQUESTS_PER_SECOND", "0", "TMDB_REQUESTS_PER_SECOND должно быть"),
         ("INDEX_QDRANT_TIMEOUT_SECONDS", "soon", "INDEX_QDRANT_TIMEOUT_SECONDS должно быть"),
+        ("INDEX_QDRANT_TIMEOUT_SECONDS", "0.5", "целым числом секунд"),
+        ("INDEX_QDRANT_TIMEOUT_SECONDS", "1.9", "целым числом секунд"),
         ("ML_DEVICE", "tpu", "ML_DEVICE"),
     ],
 )

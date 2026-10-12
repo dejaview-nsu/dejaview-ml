@@ -3,6 +3,7 @@ import io
 import logging
 import signal
 import sys
+from contextlib import suppress
 from enum import IntEnum
 from functools import partial
 from pathlib import Path
@@ -136,7 +137,8 @@ def run(args: argparse.Namespace) -> Result:
     try:
         return index_movie(args.file, args.movie_id, settings.work_dir, services)
     finally:
-        writer.close()
+        with suppress(Exception):
+            writer.close()
 
 
 def summarize(result: Result) -> None:

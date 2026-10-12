@@ -88,10 +88,14 @@ def test_upsert_and_indexed_at_against_real_schema(database_url):
     table.mark_indexed(550)
     assert stored()[3] is not None
 
+    indexed_at = stored()[3]
     table.upsert(sample_movie(550, runtime=151))
-    _, runtime_min, _, indexed_at = stored()
+    _, runtime_min, _, still_indexed_at = stored()
     assert runtime_min == 151
-    assert indexed_at is None
+    assert still_indexed_at == indexed_at
+
+    table.reset_indexed(550)
+    assert stored()[3] is None
 
     with pytest.raises(IndexingError, match="пропала из movies"):
         table.mark_indexed(603)

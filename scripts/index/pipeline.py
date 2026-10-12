@@ -50,7 +50,7 @@ def index_movie(source: Path, movie_id: int, work_dir: Path, services: Services)
     _stage(3, f"метаданные фильма {movie_id} из TMDB в таблицу movies")
     movie = services.fetch_movie(movie_id)
     services.movies.upsert(movie)
-    logger.info("Фильм %d «%s» записан в movies, indexed_at = NULL до записи векторов", movie_id, movie.title)
+    logger.info("Фильм %d «%s» записан в movies", movie_id, movie.title)
 
     work_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=f"movie-{movie_id}-", dir=work_dir))
@@ -59,6 +59,9 @@ def index_movie(source: Path, movie_id: int, work_dir: Path, services: Services)
         fragments = embed_movie(services.encoders, movie.overview, source, info, temp_dir)
 
         _stage(5, "запись векторов в Qdrant")
+        # Уже проиндексированный фильм остаётся в поиске, пока считаются эмбеддинги, и снимается
+        # только на время замены точек.
+        services.movies.reset_indexed(movie_id)
         point_counts = services.vectors.replace_movie(movie_id, fragments)
         services.movies.mark_indexed(movie_id)
         logger.info("indexed_at выставлен: фильм находится поиском")
@@ -66,7 +69,11 @@ def index_movie(source: Path, movie_id: int, work_dir: Path, services: Services)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     _stage(6, "очистка")
-    source_removed = remove_source(source, work_dir)
+    try:
+        source_removed = remove_source(source, work_dir)
+    except (OSError, KeyboardInterrupt) as error:
+        logger.warning("Фильм проиндексирован, но исходный файл не удалён (%s): %s", type(error).__name__, source)
+        source_removed = False
     return Result(movie, point_counts, source_removed, time.monotonic() - started)
 
 

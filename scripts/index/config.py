@@ -48,8 +48,8 @@ def load_settings(env_file: Path | None) -> Settings:
         ),
         database_url=database_url,
         work_dir=_read_work_dir(),
-        qdrant_timeout_seconds=int(
-            _read_number("INDEX_QDRANT_TIMEOUT_SECONDS", DEFAULT_QDRANT_TIMEOUT_SECONDS, 0, MAX_QDRANT_TIMEOUT_SECONDS)
+        qdrant_timeout_seconds=_read_seconds(
+            "INDEX_QDRANT_TIMEOUT_SECONDS", DEFAULT_QDRANT_TIMEOUT_SECONDS, MAX_QDRANT_TIMEOUT_SECONDS
         ),
         ml=_read_ml_settings(),
     )
@@ -72,6 +72,13 @@ def _read_number(name: str, default: float, above: float, maximum: float) -> flo
             f"{name} должно быть числом больше {above:g} и не больше {maximum:g}, получено: {raw_value!r}"
         )
     return value
+
+
+def _read_seconds(name: str, default: int, maximum: int) -> int:
+    value = _read_number(name, default, 0, maximum)
+    if not float(value).is_integer():
+        raise ConfigError(f"{name} должно быть целым числом секунд от 1 до {maximum}, получено: {value:g}")
+    return int(value)
 
 
 def _read_work_dir() -> Path:

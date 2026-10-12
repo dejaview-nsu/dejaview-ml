@@ -1,6 +1,7 @@
 import logging
 import time
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,19 +35,23 @@ def embed_movie(
     _load(encoders, "image")
     fragments["image"] = _collect("image", expected["image"], _encode_images(encoders, source, info, temp_dir))
 
+    # Нарезки закрываются явно: при ошибке модели ffmpeg останавливается до удаления временной папки,
+    # а не когда сборщик мусора доберётся до генератора.
     _load(encoders, "video")
-    segments = video_segments_stream(source, info, temp_dir)
-    fragments["video"] = _collect(
-        "video",
-        expected["video"],
-        (Fragment(offset, encoders._encode_frames("video", frames)) for offset, frames in segments),
-    )
+    with closing(video_segments_stream(source, info, temp_dir)) as segments:
+        fragments["video"] = _collect(
+            "video",
+            expected["video"],
+            (Fragment(offset, encoders._encode_frames("video", frames)) for offset, frames in segments),
+        )
 
     _load(encoders, "audio")
-    windows = audio_chunks(source, info, temp_dir)
-    fragments["audio"] = _collect(
-        "audio", expected["audio"], (Fragment(offset, encoders._encode_audio(window)) for offset, window in windows)
-    )
+    with closing(audio_chunks(source, info, temp_dir)) as windows:
+        fragments["audio"] = _collect(
+            "audio",
+            expected["audio"],
+            (Fragment(offset, encoders._encode_audio(window)) for offset, window in windows),
+        )
     return fragments
 
 
@@ -62,9 +67,10 @@ def _load(encoders: Encoders, modality: str) -> None:
 
 
 def _encode_images(encoders: Encoders, source: Path, info: VideoInfo, temp_dir: Path) -> Iterator[Fragment]:
-    for batch in image_batches(source, info, temp_dir):
-        for offset, image in zip(batch.offsets_sec, batch.images, strict=True):
-            yield Fragment(offset, encoders._encode_frames("image", [image]))
+    with closing(image_batches(source, info, temp_dir)) as batches:
+        for batch in batches:
+            for offset, image in zip(batch.offsets_sec, batch.images, strict=True):
+                yield Fragment(offset, encoders._encode_frames("image", [image]))
 
 
 def _collect(modality: str, expected: int, fragments: Iterator[Fragment]) -> list[Fragment]:

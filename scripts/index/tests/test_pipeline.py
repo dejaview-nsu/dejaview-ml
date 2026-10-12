@@ -35,6 +35,9 @@ class FakeMovies:
     def upsert(self, movie):
         self.log.record("movies.upsert")
 
+    def reset_indexed(self, movie_id):
+        self.log.record("movies.reset_indexed")
+
     def mark_indexed(self, movie_id):
         self.log.record("movies.mark_indexed")
 
@@ -88,6 +91,7 @@ def test_stage_order(log, tmp_path):
         "tmdb",
         "movies.upsert",
         "embed",
+        "movies.reset_indexed",
         "vectors.replace",
         "movies.mark_indexed",
     ]
@@ -103,6 +107,23 @@ def test_source_inside_work_dir_is_removed_after_success(log, tmp_path):
     result = index_movie(source, 603, work_dir, services(log))
     assert result.source_removed
     assert list(work_dir.iterdir()) == []
+
+
+@pytest.mark.parametrize("error", [PermissionError("файл открыт в плеере"), KeyboardInterrupt()])
+def test_failed_source_removal_keeps_indexed_result(log, tmp_path, monkeypatch, error):
+    work_dir = tmp_path / "work"
+    work_dir.mkdir()
+    source = work_dir / "movie.mp4"
+    source.write_bytes(b"video")
+
+    def unlink(self, missing_ok=False):
+        raise error
+
+    monkeypatch.setattr(pipeline.Path, "unlink", unlink)
+    result = index_movie(source, 603, work_dir, services(log))
+    assert log.calls[-1] == "movies.mark_indexed"
+    assert not result.source_removed
+    assert source.exists()
 
 
 def test_source_outside_work_dir_is_kept(log, tmp_path):

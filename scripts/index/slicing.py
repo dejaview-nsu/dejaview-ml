@@ -3,6 +3,7 @@ import math
 import subprocess
 import tempfile
 from collections.abc import Iterable, Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -110,7 +111,8 @@ def audio_chunks(source: Path, info: VideoInfo, temp_dir: Path) -> Iterator[tupl
                 raise FfmpegError("ffmpeg вернул неполный аудиосэмпл")
             yield np.frombuffer(chunk, dtype="<f4")
 
-    return audio_windows(blocks())
+    with closing(blocks()) as stream:
+        yield from audio_windows(stream)
 
 
 def audio_windows(blocks: Iterable[np.ndarray]) -> Iterator[tuple[int, np.ndarray]]:

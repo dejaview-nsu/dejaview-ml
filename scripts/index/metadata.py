@@ -25,8 +25,7 @@ ON CONFLICT (movie_id) DO UPDATE SET
     release_date = EXCLUDED.release_date, age_rating = EXCLUDED.age_rating,
     poster_path = EXCLUDED.poster_path, runtime_min = EXCLUDED.runtime_min,
     overview = EXCLUDED.overview, genres = EXCLUDED.genres, countries = EXCLUDED.countries,
-    crew = EXCLUDED.crew, actors = EXCLUDED.actors, cached_at = EXCLUDED.cached_at,
-    indexed_at = NULL
+    crew = EXCLUDED.crew, actors = EXCLUDED.actors, cached_at = EXCLUDED.cached_at
 """
 
 
@@ -58,6 +57,10 @@ class MovieTable:
     def upsert(self, movie: Movie) -> None:
         with self._connect() as connection:
             connection.execute(UPSERT_MOVIE, movie_to_row(movie))
+
+    def reset_indexed(self, movie_id: int) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE movies SET indexed_at = NULL WHERE movie_id = %s", (movie_id,))
 
     def mark_indexed(self, movie_id: int) -> None:
         with self._connect() as connection:
