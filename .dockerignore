@@ -1,0 +1,15 @@
+.venv
+.git
+.env
+.cache
+models
+weights
+data
+__pycache__
+*.egg-info
+.pytest_cache
+.ruff_cache
+*.safetensors
+*.pt
+*.pth
+*.bin

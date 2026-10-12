@@ -1,0 +1,13 @@
+# Local debugging only. Production compose.yaml publishes no service ports.
+services:
+  ml:
+    build:
+      args:
+        BASE_IMAGE: ubuntu:24.04
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    ports:
+      - "127.0.0.1:8000:8000"
+  qdrant:
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"

@@ -1,0 +1,43 @@
+name: dejaview-ml
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    restart: unless-stopped
+    volumes:
+      - qdrant-data:/qdrant/storage
+    expose:
+      - "6333"
+      - "6334"
+  ml:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - qdrant
+    environment:
+      ML_QDRANT_URL: http://qdrant:6333
+      ML_CACHE_DIR: /models/huggingface
+      ML_DEVICE: ${ML_DEVICE:-cpu}
+      ML_IMAGE_ENABLED: ${ML_IMAGE_ENABLED:-true}
+      ML_VIDEO_ENABLED: ${ML_VIDEO_ENABLED:-true}
+      ML_TEXT_ENABLED: ${ML_TEXT_ENABLED:-false}
+      ML_AUDIO_ENABLED: ${ML_AUDIO_ENABLED:-false}
+      ML_LOCAL_FILES_ONLY: ${ML_LOCAL_FILES_ONLY:-false}
+      ML_TOP_K: ${ML_TOP_K:-20}
+    volumes:
+      - model-cache:/models
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 10m
+      retries: 3
+volumes:
+  qdrant-data:
+  model-cache:
