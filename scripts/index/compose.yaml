@@ -1,0 +1,64 @@
+name: dejaview-index-check
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: dejaview
+      POSTGRES_USER: dejaview
+      POSTGRES_PASSWORD: dejaview_local_only
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db-schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dejaview -d dejaview"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ml:
+    build:
+      context: ../..
+      target: runtime
+      args:
+        BASE_IMAGE: ubuntu:24.04
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    environment:
+      ML_QDRANT_URL: http://qdrant:6333
+      ML_DEVICE: cpu
+      ML_TEXT_ENABLED: "true"
+      ML_IMAGE_ENABLED: "true"
+      ML_VIDEO_ENABLED: "true"
+      ML_AUDIO_ENABLED: "true"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ../../.cache/huggingface:/models/huggingface
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 10m
+      retries: 3
+
+volumes:
+  postgres-data:
+  qdrant-storage:

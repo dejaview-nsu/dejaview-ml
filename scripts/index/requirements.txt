@@ -1,0 +1,5 @@
+# Ставится из корня репозитория: pip install -r scripts/index/requirements.txt
+# torch для CPU или CUDA поставьте до этого файла, см. README.
+-e .
+-r ../catalog/requirements.txt
+psycopg[binary]>=3.2,<4
