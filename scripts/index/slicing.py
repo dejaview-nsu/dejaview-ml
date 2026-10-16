@@ -34,6 +34,7 @@ VIDEO_OUTPUT_ARGS = [
 ]
 AUDIO_SAMPLE_RATE = 48_000
 AUDIO_OUTPUT_ARGS = ["-ac", "1", "-ar", str(AUDIO_SAMPLE_RATE), "-f", "f32le"]
+AUDIO_ALIGN_FILTER = "aresample=async=1:first_pts=0"
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +103,7 @@ def video_segments_stream(source: Path, info: VideoInfo, temp_dir: Path) -> Iter
 
 def audio_chunks(source: Path, info: VideoInfo, temp_dir: Path) -> Iterator[tuple[int, np.ndarray]]:
     args = ["-threads", "1", "-i", str(source.resolve()), "-map", f"0:{info.audio_stream}", "-vn", "-sn", "-dn"]
-    args += [*AUDIO_OUTPUT_ARGS, "pipe:1"]
+    args += ["-af", AUDIO_ALIGN_FILTER, *AUDIO_OUTPUT_ARGS, "pipe:1"]
     step_bytes = AUDIO_STEP_SEC * AUDIO_SAMPLE_RATE * 4
 
     def blocks() -> Iterator[np.ndarray]:
@@ -133,7 +134,7 @@ def audio_windows(blocks: Iterable[np.ndarray]) -> Iterator[tuple[int, np.ndarra
 
 
 def read_ffmpeg(args: list[str], chunk_bytes: int, temp_dir: Path) -> Iterator[bytes]:
-    command = ["ffmpeg", "-nostdin", "-v", "error", *args]
+    command = ["ffmpeg", "-nostdin", "-v", "error", "-xerror", *args]
     with (
         tempfile.TemporaryFile(dir=temp_dir) as stderr,
         subprocess.Popen(
@@ -151,7 +152,8 @@ def read_ffmpeg(args: list[str], chunk_bytes: int, temp_dir: Path) -> Iterator[b
         errors = stderr.read().decode(errors="replace").strip()
     if return_code != 0:
         raise FfmpegError(
-            f"ffmpeg завершился с кодом {return_code}: {errors[-STDERR_PREVIEW_LENGTH:] or 'без сообщения'}"
+            f"ffmpeg завершился с кодом {return_code}: {errors[-STDERR_PREVIEW_LENGTH:] or 'без сообщения'}. "
+            "Если файл повреждён, пережмите его командой из README"
         )
     if errors:
         logger.warning("ffmpeg сообщил об ошибках декодирования: %s", errors[-STDERR_PREVIEW_LENGTH:])

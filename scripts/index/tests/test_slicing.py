@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -121,3 +122,38 @@ def test_relative_source_path(tmp_path, monkeypatch):
     assert [offset for batch in image_batches(source, info, temp_dir) for offset in batch.offsets_sec] == [0, 5]
     assert [offset for offset, _ in video_segments_stream(source, info, temp_dir)] == [0]
     assert [offset for offset, _ in audio_chunks(source, info, temp_dir)] == [0, 5]
+
+
+def mux(tmp_path: Path, *, video_start: float, audio_start: float, duration: float = 20) -> Path:
+    video = make_video(tmp_path / "video.mp4", duration=duration, audio_codec=None)
+    audio = tmp_path / "audio.m4a"
+    source = tmp_path / "movie.mp4"
+    ffmpeg = ["ffmpeg", "-nostdin", "-v", "error", "-y"]
+    tone = ["-f", "lavfi", "-i", f"sine=duration={duration - audio_start}", "-c:a", "aac", str(audio)]
+    subprocess.run([*ffmpeg, *tone], check=True)
+    inputs = ["-itsoffset", str(video_start), "-i", str(video), "-itsoffset", str(audio_start), "-i", str(audio)]
+    subprocess.run([*ffmpeg, *inputs, "-map", "0:v", "-map", "1:a", "-c", "copy", str(source)], check=True)
+    return source
+
+
+@requires_ffmpeg
+def test_audio_offsets_count_from_movie_start(tmp_path):
+    source = mux(tmp_path, video_start=0, audio_start=5)
+    windows = dict(audio_chunks(source, probe_video(source), tmp_path))
+    assert list(windows) == [0, 5, 10, 15]
+    first = windows[0]
+    assert np.abs(first[: 4 * RATE]).max() < 0.01
+    assert np.abs(first[6 * RATE :]).max() > 0.1
+    assert np.abs(windows[5][:RATE]).max() > 0.1
+
+
+@requires_ffmpeg
+def test_decoding_errors_stop_indexing(tmp_path):
+    source = make_video(tmp_path / "movie.mp4", duration=20)
+    data = bytearray(source.read_bytes())
+    noise = np.random.default_rng(0).integers(0, 256, 200, dtype=np.uint8).tobytes()
+    for position in range(len(data) // 3, 2 * len(data) // 3, 4000):
+        data[position : position + 200] = noise
+    source.write_bytes(bytes(data))
+    with pytest.raises(FfmpegError, match="пережмите"):
+        list(image_batches(source, probe_video(source), tmp_path))
