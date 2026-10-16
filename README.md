@@ -154,3 +154,5 @@ docker run --rm -v dejaview-ml_model-cache:/models \
 
 - [`scripts/catalog/`](scripts/catalog/README.md) - сбор начального каталога фильмов из TMDB:
   отбирает фильмы, забирает их метаданные и сохраняет в JSON-файл.
+- [`scripts/index/`](scripts/index/README.md) - индексация фильма: видеофайл и `movie_id` на входе,
+  эмбеддинги в Qdrant и строка в `movies` на выходе, после чего фильм находится поиском.
