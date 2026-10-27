@@ -20,7 +20,13 @@ REVISIONS = {
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="ML_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="ML_",
+        env_file=".env",
+        extra="ignore",
+        env_parse_none_str="none",
+        env_ignore_empty=True,
+    )
 
     qdrant_url: str = "http://localhost:6333"
     qdrant_grpc_port: int = 6334
@@ -39,10 +45,23 @@ class Settings(BaseSettings):
     image_revision: str = REVISIONS["image"]
     video_revision: str = REVISIONS["video"]
     top_k: int = Field(default=20, ge=1, le=1000)
+    # Порог релевантности: точки с похожестью ниже порога в ответ не попадают, если не осталось
+    # ни одной - ответ «ничего не найдено». У модальностей своя шкала похожести, поэтому и свой
+    # порог. Значения подобраны по выборке #17824, #17825, #18245
     score_threshold: float | None = Field(default=None, ge=-1, le=1)
+    score_threshold_text: float | None = Field(default=None, ge=-1, le=1)
+    score_threshold_image: float | None = Field(default=0.8614, ge=-1, le=1)
+    score_threshold_video: float | None = Field(default=0.9743, ge=-1, le=1)
+    score_threshold_audio: float | None = Field(default=0.8297, ge=-1, le=1)
     ffmpeg_timeout_seconds: float = Field(default=10, gt=0)
     body_read_timeout_seconds: float = Field(default=30, gt=0)
     torch_threads: int = Field(default=4, ge=1)
+
+    def threshold(self, modality: str) -> float | None:
+        name = f"score_threshold_{modality}"
+        if name in self.model_fields_set or "score_threshold" not in self.model_fields_set:
+            return getattr(self, name)
+        return self.score_threshold
 
     def enabled(self, modality: str) -> bool:
         return bool(getattr(self, f"{modality}_enabled", False))

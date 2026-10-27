@@ -120,3 +120,60 @@ async def test_video_uses_global_top_k_not_k_per_segment():
     ]
     store = VectorStore(Settings(_env_file=None, top_k=2), client)
     assert await store.search("video", [[1.0] * 512, [1.0] * 512]) == [10]
+
+
+MODALITIES = ("image", "video", "audio", "text")
+
+
+def thresholds(settings):
+    return [settings.threshold(modality) for modality in MODALITIES]
+
+
+def test_score_threshold_defaults():
+    assert thresholds(Settings(_env_file=None)) == [0.8614, 0.9743, 0.8297, None]
+
+
+def test_common_threshold_replaces_defaults(monkeypatch):
+    monkeypatch.setenv("ML_SCORE_THRESHOLD", "0.7")
+    assert thresholds(Settings(_env_file=None)) == [0.7, 0.7, 0.7, 0.7]
+
+
+def test_explicit_none_disables_threshold_despite_common(monkeypatch):
+    monkeypatch.setenv("ML_SCORE_THRESHOLD", "0.7")
+    monkeypatch.setenv("ML_SCORE_THRESHOLD_IMAGE", "0.5")
+    monkeypatch.setenv("ML_SCORE_THRESHOLD_AUDIO", "none")
+    assert thresholds(Settings(_env_file=None)) == [0.5, 0.7, None, 0.7]
+
+
+def test_empty_threshold_variable_is_not_set(monkeypatch):
+    # Так приходит переменная из compose вида ${ML_SCORE_THRESHOLD_IMAGE:-}, не заданная на сервере.
+    monkeypatch.setenv("ML_SCORE_THRESHOLD", "")
+    monkeypatch.setenv("ML_SCORE_THRESHOLD_IMAGE", "")
+    assert thresholds(Settings(_env_file=None)) == [0.8614, 0.9743, 0.8297, None]
+
+
+@pytest.mark.parametrize(
+    ("modality", "expected"), [("image", 0.8614), ("audio", 0.8297), ("text", None)]
+)
+async def test_search_uses_threshold_of_its_modality(modality, expected):
+    client = AsyncMock()
+    client.query_points.return_value = QueryResponse(points=[])
+    store = VectorStore(Settings(_env_file=None), client)
+    assert await store.search(modality, [[1.0] * DIMENSIONS[modality]]) == []
+    assert client.query_points.call_args.kwargs["score_threshold"] == expected
+
+
+@pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
+async def test_points_below_threshold_give_empty_answer(tmp_path):
+    client = AsyncQdrantClient(path=str(tmp_path / "qdrant"))
+    stored = [1.0] + [0.0] * 511
+    await VectorStore(Settings(_env_file=None), client).ensure_collections()
+    point = models.PointStruct(
+        id=point_id("image", 603, 0), vector=stored, payload=point_payload("image", 603, 0)
+    )
+    await client.upsert("image", [point])
+    query = [0.8, 0.6] + [0.0] * 510  # похожесть 0.8, ниже порога image
+    assert await VectorStore(Settings(_env_file=None), client).search("image", [query]) == []
+    disabled = Settings(_env_file=None, score_threshold_image=None)
+    assert await VectorStore(disabled, client).search("image", [query]) == [603]
+    await client.close()

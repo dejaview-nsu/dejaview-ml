@@ -104,7 +104,7 @@ class VectorStore:
                     collection_name=modality,
                     query=vector,
                     limit=self.settings.top_k,
-                    score_threshold=self.settings.score_threshold,
+                    score_threshold=self.settings.threshold(modality),
                     with_payload=True,
                     with_vectors=False,
                 )
