@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     top_k: int = Field(default=20, ge=1, le=1000)
     # Порог релевантности: точки с похожестью ниже порога в ответ не попадают, если не осталось
     # ни одной - ответ «ничего не найдено». У модальностей своя шкала похожести, поэтому и свой
-    # порог. Значения подобраны по выборке #17824, #17825, #18245 
+    # порог. Значения подобраны по выборке #17824, #17825, #18245
     score_threshold: float | None = Field(default=None, ge=-1, le=1)
     score_threshold_text: float | None = Field(default=None, ge=-1, le=1)
     score_threshold_image: float | None = Field(default=0.8614, ge=-1, le=1)
