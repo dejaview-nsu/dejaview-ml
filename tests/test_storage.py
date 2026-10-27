@@ -120,3 +120,51 @@ async def test_video_uses_global_top_k_not_k_per_segment():
     ]
     store = VectorStore(Settings(_env_file=None, top_k=2), client)
     assert await store.search("video", [[1.0] * 512, [1.0] * 512]) == [10]
+
+
+def test_score_threshold_per_modality(monkeypatch):
+    defaults = Settings(_env_file=None)
+    assert [defaults.threshold(m) for m in ("image", "video", "audio", "text")] == [
+        0.8614,
+        0.9743,
+        0.8297,
+        None,
+    ]
+
+    monkeypatch.setenv("ML_SCORE_THRESHOLD", "0.7")
+    monkeypatch.setenv("ML_SCORE_THRESHOLD_IMAGE", "0.5")
+    monkeypatch.setenv("ML_SCORE_THRESHOLD_AUDIO", "none")
+    settings = Settings(_env_file=None)
+    assert [settings.threshold(m) for m in ("image", "video", "audio", "text")] == [
+        0.5,
+        0.9743,
+        0.7,
+        0.7,
+    ]
+
+
+@pytest.mark.parametrize(
+    ("modality", "expected"), [("image", 0.8614), ("audio", 0.8297), ("text", None)]
+)
+async def test_search_uses_threshold_of_its_modality(modality, expected):
+    client = AsyncMock()
+    client.query_points.return_value = QueryResponse(points=[])
+    store = VectorStore(Settings(_env_file=None), client)
+    assert await store.search(modality, [[1.0] * DIMENSIONS[modality]]) == []
+    assert client.query_points.call_args.kwargs["score_threshold"] == expected
+
+
+@pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
+async def test_points_below_threshold_give_empty_answer(tmp_path):
+    client = AsyncQdrantClient(path=str(tmp_path / "qdrant"))
+    stored = [1.0] + [0.0] * 511
+    await VectorStore(Settings(_env_file=None), client).ensure_collections()
+    point = models.PointStruct(
+        id=point_id("image", 603, 0), vector=stored, payload=point_payload("image", 603, 0)
+    )
+    await client.upsert("image", [point])
+    query = [0.8, 0.6] + [0.0] * 510  # похожесть 0.8, ниже порога image
+    assert await VectorStore(Settings(_env_file=None), client).search("image", [query]) == []
+    disabled = Settings(_env_file=None, score_threshold_image=None)
+    assert await VectorStore(disabled, client).search("image", [query]) == [603]
+    await client.close()
