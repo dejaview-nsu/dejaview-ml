@@ -47,17 +47,18 @@ class VectorWriter:
                 )
 
     def replace_movie(self, movie_id: int, fragments: dict[str, list[Fragment]]) -> dict[str, int]:
-        for name in DIMENSIONS:
+        # Заменяются только переданные коллекции: индексация одного текста не трогает кадры, видео и звук.
+        for name in fragments:
             self._call(f"удаление старых точек из {name}", lambda name=name: self._delete_movie(name, movie_id))
         counts = {}
-        for name in DIMENSIONS:
+        for name, movie_fragments in fragments.items():
             points = [
                 models.PointStruct(
-                    id=point_id(name, movie_id, fragment.offset_sec),
+                    id=point_id(name, movie_id, fragment.offset_sec, fragment.source),
                     vector=fragment.vector,
-                    payload=point_payload(name, movie_id, fragment.offset_sec),
+                    payload=point_payload(name, movie_id, fragment.offset_sec, fragment.source),
                 )
-                for fragment in fragments[name]
+                for fragment in movie_fragments
             ]
             for start in range(0, len(points), UPSERT_BATCH_SIZE):
                 batch = points[start : start + UPSERT_BATCH_SIZE]

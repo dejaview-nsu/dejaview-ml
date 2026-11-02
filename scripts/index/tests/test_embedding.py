@@ -2,6 +2,7 @@ import subprocess
 
 import pytest
 
+from scripts.catalog.tests.samples import sample_movie
 from scripts.index import slicing
 from scripts.index.embedding import embed_movie
 from scripts.index.tests.videos import make_video, requires_ffmpeg
@@ -47,7 +48,7 @@ def test_encoder_failure_stops_ffmpeg_before_cleanup(tmp_path, monkeypatch, moda
 
     monkeypatch.setattr(slicing.subprocess, "Popen", popen)
     with pytest.raises(RuntimeError, match="модель упала") as failure:
-        embed_movie(FailingEncoders(modality), "описание", source, info, temp_dir)
+        embed_movie(FailingEncoders(modality), sample_movie(), source, info, temp_dir)
     # Ошибка ещё не обработана и держит кадры генераторов: так её видит finally в pipeline
     assert failure.value
     assert processes

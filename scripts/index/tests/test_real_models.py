@@ -6,6 +6,8 @@ import pytest
 
 from dejaview_ml.config import Settings
 from dejaview_ml.embeddings import Encoders
+from dejaview_ml.storage import metadata_passage
+from scripts.catalog.tests.samples import sample_movie
 from scripts.index.embedding import embed_movie
 from scripts.index.tests.videos import make_video, requires_ffmpeg
 from scripts.index.validation import probe_video
@@ -40,7 +42,8 @@ def cut(source, start, duration, name, *options):
 def test_indexed_fragments_match_queries(tmp_path):
     source = make_video(tmp_path / "movie.mp4", duration=22)
     encoders = Encoders(Settings(_env_file=None, device="cpu"))
-    fragments = embed_movie(encoders, "Тестовое описание фильма", source, probe_video(source), tmp_path)
+    movie = sample_movie(550)
+    fragments = embed_movie(encoders, movie, source, probe_video(source), tmp_path)
 
     assert [fragment.offset_sec for fragment in fragments["image"]] == [0, 5, 10, 15, 20]
     assert [fragment.offset_sec for fragment in fragments["video"]] == [0, 10, 20]
@@ -61,5 +64,9 @@ def test_indexed_fragments_match_queries(tmp_path):
     (audio_query,) = encoders.encode("audio", sound, "audio/wav")
     assert similarity(fragments["audio"][0].vector, audio_query) > 0.999
 
-    (text_query,) = encoders.encode_text("Тестовое описание фильма", passage=True)
-    assert similarity(fragments["text"][0].vector, text_query) > 0.999
+    overview, metadata = fragments["text"]
+    assert (overview.source, metadata.source) == ("overview", "metadata")
+    (overview_query,) = encoders.encode_text(movie.overview, passage=True)
+    assert similarity(overview.vector, overview_query) > 0.999
+    (metadata_query,) = encoders.encode_text(metadata_passage(movie), passage=True)
+    assert similarity(metadata.vector, metadata_query) > 0.999
