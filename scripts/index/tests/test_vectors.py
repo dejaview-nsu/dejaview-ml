@@ -119,3 +119,30 @@ def test_text_only_replacement_keeps_other_collections(client):
     assert len(movie_points(client, "image", 603)) == 3
     assert len(movie_points(client, "video", 603)) == 1
     assert len(movie_points(client, "audio", 603)) == 2
+
+
+def text_fragment(source: str, value: float) -> Fragment:
+    return Fragment(None, [value] + [0.0] * (DIMENSIONS["text"] - 1), source)
+
+
+def test_text_update_overwrites_points_in_place_and_keeps_other_collections(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(3))
+    writer.update_text(603, [text_fragment("overview", 0.5), text_fragment("metadata", 0.5)])
+
+    text = movie_points(client, "text", 603)
+    assert sorted(point.payload["source"] for point in text) == ["metadata", "overview"]
+    assert len(movie_points(client, "image", 603)) == 3
+    assert len(movie_points(client, "video", 603)) == 1
+    assert len(movie_points(client, "audio", 603)) == 2
+
+
+def test_text_update_removes_point_that_is_no_longer_produced(client):
+    writer = VectorWriter(client, "memory")
+    writer.update_text(603, [text_fragment("overview", 1.0), text_fragment("metadata", 1.0)])
+    writer.update_text(550, [text_fragment("overview", 1.0), text_fragment("metadata", 1.0)])
+    writer.update_text(603, [text_fragment("overview", 1.0)])
+
+    (overview,) = movie_points(client, "text", 603)
+    assert overview.id == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
+    assert len(movie_points(client, "text", 550)) == 2

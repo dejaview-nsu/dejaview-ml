@@ -76,8 +76,9 @@ class FakeVectors:
     def __init__(self, log):
         self.log = log
 
-    def replace_movie(self, movie_id, fragments):
-        self.log("replace", movie_id, {name: [item.source for item in items] for name, items in fragments.items()})
+    def update_text(self, movie_id, fragments):
+        self.log("update_text", movie_id, [fragment.source for fragment in fragments])
+        return len(fragments)
         return {name: len(items) for name, items in fragments.items()}
 
 
@@ -105,17 +106,24 @@ def test_movie_from_movies_table_is_not_fetched_from_tmdb():
     result = index_texts([603, 550], services(log, stored=[603]))
     assert [movie.movie_id for movie in result.indexed] == [603, 550]
     assert result.total == 2
-    text_only = {"text": ["overview", "metadata"]}
+    sources = ["overview", "metadata"]
     assert log.calls == [
-        ("reset_indexed", 603),
-        ("replace", 603, text_only),
+        ("update_text", 603, sources),
         ("mark_indexed", 603),
         ("tmdb", 550),
         ("upsert", 550),
-        ("reset_indexed", 550),
-        ("replace", 550, text_only),
+        ("update_text", 550, sources),
         ("mark_indexed", 550),
     ]
+
+
+def test_failed_text_write_keeps_indexed_at_for_the_next_all_run():
+    # Сценарий из ревью: запись упала - indexed_at не сброшен, поэтому --all снова выберет фильм.
+    log = Recorder()
+    log.fail["update_text"] = IndexingError("Сбой Qdrant")
+    with pytest.raises(IndexingError):
+        index_texts([603], services(log, stored=[603]))
+    assert [call[0] for call in log.calls] == ["update_text"]
 
 
 def test_tmdb_problems_with_one_movie_do_not_stop_the_run():
@@ -140,7 +148,7 @@ def test_all_mode_needs_no_explicit_ids():
 def test_key_and_storage_failures_stop_the_run(error):
     log = Recorder()
     if isinstance(error, IndexingError):
-        log.fail["replace"] = error
+        log.fail["update_text"] = error
         outcomes = {}
     else:
         outcomes = {603: error}

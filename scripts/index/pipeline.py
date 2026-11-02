@@ -114,8 +114,9 @@ def index_texts(movie_ids: list[int], services: Services) -> TextResult:
                 continue
             services.movies.upsert(movie)
         fragments = embed_text(services.encoders, movie)
-        services.movies.reset_indexed(movie_id)
-        services.vectors.replace_movie(movie_id, {"text": fragments})
+        # indexed_at не сбрасывается: точки перезаписываются по ID, и при сбое у фильма остаются прежние
+        # или уже новые точки, а --all подхватит его повторным запуском.
+        services.vectors.update_text(movie_id, fragments)
         services.movies.mark_indexed(movie_id)
         result.indexed.append(movie)
         logger.info("%s «%s»: точек text %d", prefix, movie.title, len(fragments))
