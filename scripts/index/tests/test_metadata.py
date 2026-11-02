@@ -1,11 +1,12 @@
 import os
+from dataclasses import asdict
 
 import pytest
 from psycopg.types.json import Jsonb
 
 from scripts.catalog.tests.samples import sample_movie
 from scripts.index.errors import IndexingError
-from scripts.index.metadata import MovieTable, movie_to_row
+from scripts.index.metadata import MovieTable, movie_from_row, movie_to_row
 
 MOVIES_DDL = """
 CREATE TABLE movies (
@@ -99,3 +100,15 @@ def test_upsert_and_indexed_at_against_real_schema(database_url):
 
     with pytest.raises(IndexingError, match="пропала из movies"):
         table.mark_indexed(603)
+
+    assert table.load(550) == sample_movie(550, runtime=151)
+    assert table.load(603) is None
+    assert table.indexed_ids() == []
+    table.mark_indexed(550)
+    assert table.indexed_ids() == [550]
+
+
+def test_movie_row_converts_back_to_movie():
+    movie = sample_movie(550)
+    # Так строку отдаёт psycopg: JSONB уже разобран в списки словарей.
+    assert movie_from_row(asdict(movie)) == movie

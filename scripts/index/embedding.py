@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dejaview_ml.config import MODEL_IDS
 from dejaview_ml.embeddings import Encoders
+from dejaview_ml.storage import metadata_passage
+from scripts.catalog.movies.model import Movie
 from scripts.index.errors import IndexingError
 from scripts.index.slicing import audio_chunks, expected_counts, image_batches, video_segments_stream
 from scripts.index.validation import VideoInfo
@@ -20,24 +22,37 @@ logger = logging.getLogger(__name__)
 class Fragment:
     offset_sec: int | None
     vector: list[float]
+    source: str | None = None
+
+
+def embed_text(encoders: Encoders, movie: Movie) -> list[Fragment]:
+    """Точки text фильма (contracts/backend-ml.md, «Коллекция text»): описание и строка метаданных.
+    Точки нет, если её поле пустое."""
+    fragments = []
+    if movie.overview:
+        fragments.append(Fragment(None, encoders.encode_text(movie.overview, passage=True)[0], "overview"))
+    metadata = metadata_passage(movie)
+    if metadata:
+        fragments.append(Fragment(None, encoders.encode_text(metadata, passage=True)[0], "metadata"))
+    return fragments
 
 
 def embed_movie(
-    encoders: Encoders, overview: str, source: Path, info: VideoInfo, temp_dir: Path
+    encoders: Encoders, movie: Movie, source: Path, info: VideoInfo, temp_dir: Path
 ) -> dict[str, list[Fragment]]:
     expected = expected_counts(info.duration_sec)
     fragments: dict[str, list[Fragment]] = {}
 
-    _load(encoders, "text")
-    fragments["text"] = [Fragment(None, encoders.encode_text(overview, passage=True)[0])]
-    logger.info("text: описание фильма закодировано")
+    load_model(encoders, "text")
+    fragments["text"] = embed_text(encoders, movie)
+    logger.info("text: описание и метаданные фильма закодированы")
 
-    _load(encoders, "image")
+    load_model(encoders, "image")
     fragments["image"] = _collect("image", expected["image"], _encode_images(encoders, source, info, temp_dir))
 
     # Нарезки закрываются явно: при ошибке модели ffmpeg останавливается до удаления временной папки,
     # а не когда сборщик мусора доберётся до генератора.
-    _load(encoders, "video")
+    load_model(encoders, "video")
     with closing(video_segments_stream(source, info, temp_dir)) as segments:
         fragments["video"] = _collect(
             "video",
@@ -45,7 +60,7 @@ def embed_movie(
             (Fragment(offset, encoders._encode_frames("video", frames)) for offset, frames in segments),
         )
 
-    _load(encoders, "audio")
+    load_model(encoders, "audio")
     with closing(audio_chunks(source, info, temp_dir)) as windows:
         fragments["audio"] = _collect(
             "audio",
@@ -55,7 +70,7 @@ def embed_movie(
     return fragments
 
 
-def _load(encoders: Encoders, modality: str) -> None:
+def load_model(encoders: Encoders, modality: str) -> None:
     logger.info("%s: загрузка модели %s (первый запуск скачивает веса)", modality, MODEL_IDS[modality])
     try:
         encoders.load(modality)

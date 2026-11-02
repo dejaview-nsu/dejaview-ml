@@ -25,7 +25,7 @@ def fragments(image_count: int, value: float = 1.0) -> dict[str, list[Fragment]]
         return [value] + [0.0] * (DIMENSIONS[name] - 1)
 
     return {
-        "text": [Fragment(None, vector("text"))],
+        "text": [Fragment(None, vector("text"), "overview"), Fragment(None, vector("text"), "metadata")],
         "image": [Fragment(5 * index, vector("image")) for index in range(image_count)],
         "video": [Fragment(0, vector("video"))],
         "audio": [Fragment(0, vector("audio")), Fragment(5, vector("audio"))],
@@ -40,11 +40,17 @@ def movie_points(client: QdrantClient, collection: str, movie_id: int) -> list[m
 
 def test_points_follow_the_contract(client):
     counts = VectorWriter(client, "memory").replace_movie(603, fragments(3))
-    assert counts == {"text": 1, "image": 3, "video": 1, "audio": 2}
+    assert counts == {"text": 2, "image": 3, "video": 1, "audio": 2}
 
-    (text,) = movie_points(client, "text", 603)
-    assert text.id == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
-    assert text.payload == {"movie_id": 603, "type": "text"}
+    text = {point.id: point.payload for point in movie_points(client, "text", 603)}
+    assert text == {
+        str(uuid5(NAMESPACE_URL, "dejaview:text:603")): {"movie_id": 603, "type": "text", "source": "overview"},
+        str(uuid5(NAMESPACE_URL, "dejaview:text:603:metadata")): {
+            "movie_id": 603,
+            "type": "text",
+            "source": "metadata",
+        },
+    }
 
     image = {point.id: point.payload for point in movie_points(client, "image", 603)}
     assert image[str(uuid5(NAMESPACE_URL, "dejaview:image:603:10"))] == {
@@ -62,7 +68,7 @@ def test_repeated_run_does_not_duplicate_and_drops_stale_points(client):
 
     assert sorted(point.payload["offset_sec"] for point in movie_points(client, "image", 603)) == [0, 5, 10]
     assert len(movie_points(client, "image", 550)) == 2
-    assert {name: client.count(name).count for name in DIMENSIONS} == {"text": 2, "image": 5, "video": 2, "audio": 4}
+    assert {name: client.count(name).count for name in DIMENSIONS} == {"text": 4, "image": 5, "video": 2, "audio": 4}
 
 
 def test_collections_are_checked_not_created():
@@ -102,3 +108,41 @@ def test_grpc_error_is_reported_in_one_line():
 
     assert describe_qdrant_error(RpcError()) == "failed to connect to all addresses; last error: UNAVAILABLE"
     assert describe_qdrant_error(TimeoutError()) == "TimeoutError"
+
+
+def test_text_only_replacement_keeps_other_collections(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(3))
+    counts = writer.replace_movie(603, {"text": [Fragment(None, [0.5] + [0.0] * (DIMENSIONS["text"] - 1))]})
+    assert counts == {"text": 1}
+    assert len(movie_points(client, "text", 603)) == 1
+    assert len(movie_points(client, "image", 603)) == 3
+    assert len(movie_points(client, "video", 603)) == 1
+    assert len(movie_points(client, "audio", 603)) == 2
+
+
+def text_fragment(source: str, value: float) -> Fragment:
+    return Fragment(None, [value] + [0.0] * (DIMENSIONS["text"] - 1), source)
+
+
+def test_text_update_overwrites_points_in_place_and_keeps_other_collections(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(3))
+    writer.update_text(603, [text_fragment("overview", 0.5), text_fragment("metadata", 0.5)])
+
+    text = movie_points(client, "text", 603)
+    assert sorted(point.payload["source"] for point in text) == ["metadata", "overview"]
+    assert len(movie_points(client, "image", 603)) == 3
+    assert len(movie_points(client, "video", 603)) == 1
+    assert len(movie_points(client, "audio", 603)) == 2
+
+
+def test_text_update_removes_point_that_is_no_longer_produced(client):
+    writer = VectorWriter(client, "memory")
+    writer.update_text(603, [text_fragment("overview", 1.0), text_fragment("metadata", 1.0)])
+    writer.update_text(550, [text_fragment("overview", 1.0), text_fragment("metadata", 1.0)])
+    writer.update_text(603, [text_fragment("overview", 1.0)])
+
+    (overview,) = movie_points(client, "text", 603)
+    assert overview.id == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
+    assert len(movie_points(client, "text", 550)) == 2

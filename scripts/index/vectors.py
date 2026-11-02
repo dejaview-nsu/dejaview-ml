@@ -5,7 +5,7 @@ from typing import TypeVar
 from qdrant_client import QdrantClient, models
 
 from dejaview_ml.config import DIMENSIONS
-from dejaview_ml.storage import point_id, point_payload
+from dejaview_ml.storage import TEXT_SOURCES, point_id, point_payload
 from scripts.index.embedding import Fragment
 from scripts.index.errors import IndexingError
 
@@ -47,26 +47,37 @@ class VectorWriter:
                 )
 
     def replace_movie(self, movie_id: int, fragments: dict[str, list[Fragment]]) -> dict[str, int]:
-        for name in DIMENSIONS:
+        # Заменяются только переданные коллекции: индексация одного текста не трогает кадры, видео и звук.
+        for name in fragments:
             self._call(f"удаление старых точек из {name}", lambda name=name: self._delete_movie(name, movie_id))
-        counts = {}
-        for name in DIMENSIONS:
-            points = [
-                models.PointStruct(
-                    id=point_id(name, movie_id, fragment.offset_sec),
-                    vector=fragment.vector,
-                    payload=point_payload(name, movie_id, fragment.offset_sec),
-                )
-                for fragment in fragments[name]
-            ]
-            for start in range(0, len(points), UPSERT_BATCH_SIZE):
-                batch = points[start : start + UPSERT_BATCH_SIZE]
-                self._call(
-                    f"запись в {name}", lambda name=name, batch=batch: self._client.upsert(name, batch, wait=True)
-                )
-            counts[name] = len(points)
-            logger.info("%s: записано %d точек", name, len(points))
-        return counts
+        return {name: self._write(name, movie_id, movie_fragments) for name, movie_fragments in fragments.items()}
+
+    def update_text(self, movie_id: int, fragments: list[Fragment]) -> int:
+        """Точки text без удаления фильма (contracts/backend-ml.md, «Коллекция text», «Индексация»): upsert
+        по ID, затем удаление по ID точек, которых больше нет. Если запись упадёт, у фильма останутся прежние
+        или уже новые точки, а не пустота."""
+        count = self._write("text", movie_id, fragments)
+        present = {fragment.source for fragment in fragments}
+        stale = [point_id("text", movie_id, source=source) for source in TEXT_SOURCES if source not in present]
+        if stale:
+            selector = models.PointIdsList(points=stale)
+            self._call("удаление устаревших точек text", lambda: self._client.delete("text", selector, wait=True))
+        return count
+
+    def _write(self, name: str, movie_id: int, fragments: list[Fragment]) -> int:
+        points = [
+            models.PointStruct(
+                id=point_id(name, movie_id, fragment.offset_sec, fragment.source),
+                vector=fragment.vector,
+                payload=point_payload(name, movie_id, fragment.offset_sec, fragment.source),
+            )
+            for fragment in fragments
+        ]
+        for start in range(0, len(points), UPSERT_BATCH_SIZE):
+            batch = points[start : start + UPSERT_BATCH_SIZE]
+            self._call(f"запись в {name}", lambda name=name, batch=batch: self._client.upsert(name, batch, wait=True))
+        logger.info("%s: записано %d точек", name, len(points))
+        return len(points)
 
     def _delete_movie(self, collection: str, movie_id: int) -> None:
         self._client.delete(

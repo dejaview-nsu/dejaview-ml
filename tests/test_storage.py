@@ -1,3 +1,5 @@
+from datetime import date
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import NAMESPACE_URL, uuid5
 
@@ -8,16 +10,79 @@ from qdrant_client.http.models import QueryResponse
 import dejaview_ml.storage as storage
 from dejaview_ml.config import DIMENSIONS, Settings
 from dejaview_ml.errors import MlError
-from dejaview_ml.storage import SchemaMismatch, VectorStore, aggregate, point_id, point_payload
+from dejaview_ml.storage import (
+    SchemaMismatch,
+    VectorStore,
+    aggregate,
+    metadata_passage,
+    point_id,
+    point_payload,
+)
 
 
 def test_metadata_and_stable_point_ids():
     assert point_payload("image", 603, 125) == {"movie_id": 603, "type": "image", "offset_sec": 125}
-    assert point_payload("text", 603) == {"movie_id": 603, "type": "text"}
+    assert point_payload("text", 603) == {"movie_id": 603, "type": "text", "source": "overview"}
+    assert point_payload("text", 603, source="metadata") == {
+        "movie_id": 603,
+        "type": "text",
+        "source": "metadata",
+    }
     assert point_id("image", 603, 125) == str(uuid5(NAMESPACE_URL, "dejaview:image:603:125"))
-    for args in [("text", 603, 0), ("image", 603, None), ("image", 603, -1), ("video", True, 0)]:
+    assert point_id("text", 603) == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
+    assert point_id("text", 603, source="overview") == str(
+        uuid5(NAMESPACE_URL, "dejaview:text:603")
+    )
+    assert point_id("text", 603, source="metadata") == str(
+        uuid5(NAMESPACE_URL, "dejaview:text:603:metadata")
+    )
+    invalid = [
+        ("text", 603, 0),
+        ("image", 603, None),
+        ("image", 603, -1),
+        ("video", True, 0),
+        ("text", 603, None, "title"),
+        ("image", 603, 0, "overview"),
+    ]
+    for args in invalid:
         with pytest.raises(ValueError):
             point_payload(*args)
+
+
+def named(*names):
+    return [SimpleNamespace(name=name) for name in names]
+
+
+def actor(name, character=None):
+    return SimpleNamespace(name=name, character=character)
+
+
+def test_metadata_passage_matches_contract_example():
+    movie = SimpleNamespace(
+        genres=named("боевик", "фантастика"),
+        release_date=date(1999, 3, 31),
+        countries=named("США"),
+        actors=[
+            actor("Киану Ривз", "Neo"),
+            actor("Лоренс Фишберн", "Morpheus"),
+            actor("Кэрри-Энн Мосс", "Trinity"),
+            actor("Хьюго Уивинг", "Agent Smith"),
+        ],
+    )
+    assert metadata_passage(movie) == (
+        "Жанр: боевик, фантастика. Год: 1999, 1990-е. Страна: США. В ролях: Киану Ривз (Neo); "
+        "Лоренс Фишберн (Morpheus); Кэрри-Энн Мосс (Trinity); Хьюго Уивинг (Agent Smith)."
+    )
+
+
+def test_metadata_passage_skips_empty_fields_and_extra_actors():
+    actors = [actor(f"Актёр {number}") for number in range(15)]
+    movie = SimpleNamespace(genres=[], release_date=None, countries=[], actors=actors)
+    passage = metadata_passage(movie)
+    assert passage.startswith("В ролях: Актёр 0; Актёр 1;")
+    assert passage.endswith("Актёр 9.")
+    empty = SimpleNamespace(genres=[], release_date=None, countries=[], actors=[])
+    assert metadata_passage(empty) is None
 
 
 @pytest.mark.parametrize(("key", "expected"), [(None, None), ("", None), ("secret", "secret")])
@@ -35,6 +100,16 @@ def test_aggregation_sums_distinct_fragments_and_breaks_ties():
     points = [hit(1, 1, 0.8), hit(2, 2, 0.6), hit(3, 2, 0.5), hit(1, 1, 0.7)]
     assert aggregate(points) == [2]
     assert aggregate([hit(4, 3, 1), hit(5, 1, 1)], limit=2) == [1, 3]
+
+
+def test_text_film_score_is_its_best_point():
+    def hit(id, movie, score):
+        return models.ScoredPoint(id=id, version=1, score=score, payload={"movie_id": movie})
+
+    # Два средних совпадения фильма 1 в сумме обгоняют одно сильное у фильма 2, максимум - нет.
+    points = [hit(1, 1, 0.80), hit(2, 1, 0.79), hit(3, 2, 0.85)]
+    assert aggregate(points, limit=2) == [1, 2]
+    assert aggregate(points, limit=2, combine="max") == [2, 1]
 
 
 @pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
@@ -177,3 +252,16 @@ async def test_points_below_threshold_give_empty_answer(tmp_path):
     disabled = Settings(_env_file=None, score_threshold_image=None)
     assert await VectorStore(disabled, client).search("image", [query]) == [603]
     await client.close()
+
+
+async def test_text_search_ranks_films_by_best_point():
+    client = AsyncMock()
+
+    def hit(id, movie, score):
+        return models.ScoredPoint(id=id, version=1, score=score, payload={"movie_id": movie})
+
+    client.query_points.return_value = QueryResponse(
+        points=[hit(1, 10, 0.80), hit(2, 10, 0.79), hit(3, 20, 0.85)]
+    )
+    store = VectorStore(Settings(_env_file=None), client)
+    assert await store.search("text", [[1.0] * 768]) == [20, 10]
