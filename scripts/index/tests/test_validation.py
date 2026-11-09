@@ -23,6 +23,11 @@ def test_widescreen_480p_is_accepted(tmp_path):
     assert (info.width, info.height) == (854, 358)
 
 
+def test_rutube_480p_is_accepted(tmp_path):
+    info = probe_video(make_video(tmp_path / "rutube.mp4", size="856x480"))
+    assert (info.width, info.height) == (856, 480)
+
+
 def test_anamorphic_sample_aspect_ratio(tmp_path):
     path = make_video(tmp_path / "dvd.mp4", size="720x480", extra=("-vf", "setsar=32/27"))
     assert probe_video(path).sample_aspect_ratio == Fraction(32, 27)

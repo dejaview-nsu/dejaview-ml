@@ -4,7 +4,7 @@ from typing import TypeVar
 
 from qdrant_client import QdrantClient, models
 
-from dejaview_ml.config import DIMENSIONS
+from dejaview_ml.config import DIMENSIONS, SPEECH_COLLECTION
 from dejaview_ml.storage import TEXT_SOURCES, point_id, point_payload
 from scripts.index.embedding import Fragment
 from scripts.index.errors import IndexingError
@@ -76,6 +76,29 @@ class VectorWriter:
         for start in range(0, len(points), UPSERT_BATCH_SIZE):
             batch = points[start : start + UPSERT_BATCH_SIZE]
             self._call(f"запись в {name}", lambda name=name, batch=batch: self._client.upsert(name, batch, wait=True))
+        logger.info("%s: записано %d точек", name, len(points))
+        return len(points)
+
+    def replace_speech(self, movie_id: int, windows: list[tuple[int, str, list[float]]]) -> int:
+        """windows: (offset_sec, text, vector). Old dialogue of the film is replaced entirely."""
+        name = SPEECH_COLLECTION
+        if not self._call(f"проверка коллекции {name}", lambda: self._client.collection_exists(name)):
+            raise IndexingError(
+                f"В Qdrant ({self._url}) нет коллекции «{name}». Её создаёт ML-сервис новой версии при старте: "
+                "перезапустите его или проверьте ML_QDRANT_URL"
+            )
+        self._call(f"удаление старых точек из {name}", lambda: self._delete_movie(name, movie_id))
+        points = [
+            models.PointStruct(
+                id=point_id(name, movie_id, offset),
+                vector=vector,
+                payload={**point_payload(name, movie_id, offset), "text": text},
+            )
+            for offset, text, vector in windows
+        ]
+        for start in range(0, len(points), UPSERT_BATCH_SIZE):
+            batch = points[start : start + UPSERT_BATCH_SIZE]
+            self._call(f"запись в {name}", lambda batch=batch: self._client.upsert(name, batch, wait=True))
         logger.info("%s: записано %d точек", name, len(points))
         return len(points)
 

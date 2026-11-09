@@ -9,12 +9,13 @@ from typing import Any
 
 from scripts.index.errors import ConfigError, UnsuitableFileError
 
-MAX_WIDTH = 854
+# RUTUBE отдаёт 480p как 856×480: два лишних пикселя не повод пережимать весь фильм.
+MAX_WIDTH = 856
 MAX_HEIGHT = 480
 PROBE_TIMEOUT_SECONDS = 60
 STDERR_PREVIEW_LENGTH = 300
 REENCODE_HINT = (
-    'ffmpeg -i in.mkv -map 0:v:0 -map 0:a:0 -c:v libx264 -c:a aac -vf "scale=854:480:'
+    'ffmpeg -i in.mkv -map 0:v:0 -map 0:a:0 -c:v libx264 -c:a aac -vf "scale=856:480:'
     'force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1" out.mp4'
 )
 

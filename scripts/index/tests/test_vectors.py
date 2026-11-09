@@ -146,3 +146,19 @@ def test_text_update_removes_point_that_is_no_longer_produced(client):
     (overview,) = movie_points(client, "text", 603)
     assert overview.id == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
     assert len(movie_points(client, "text", 550)) == 2
+
+
+def test_replace_speech_keeps_line_text_and_replaces_old_lines(client):
+    client.create_collection("speech", vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE))
+    writer = VectorWriter(client, "memory")
+    vector = [1.0] + [0.0] * 767
+    assert writer.replace_speech(603, [(1680, "Она с тобой на работе", vector), (1690, "Какую правду?", vector)]) == 2
+    assert writer.replace_speech(603, [(1680, "Матрица повсюду", vector)]) == 1
+    (point,) = movie_points(client, "speech", 603)
+    assert point.payload == {"movie_id": 603, "type": "speech", "offset_sec": 1680, "text": "Матрица повсюду"}
+    assert point.id == str(uuid5(NAMESPACE_URL, "dejaview:speech:603:1680"))
+
+
+def test_replace_speech_requires_collection(client):
+    with pytest.raises(IndexingError, match="speech"):
+        VectorWriter(client, "memory").replace_speech(603, [])
