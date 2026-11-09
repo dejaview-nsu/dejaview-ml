@@ -172,7 +172,7 @@ def create_app(
         async with app.state.inference_lock:
             if modality == "text":
                 vectors = await asyncio.to_thread(app.state.encoders.encode_text, query)
-                return {"movie_ids": await app.state.store.search(modality, vectors)}
+                return {"movie_ids": await app.state.store.search_text(vectors[0], query)}
             if modality == "audio":
                 query = await asyncio.to_thread(
                     app.state.encoders.encode_audio_query, data, content_type

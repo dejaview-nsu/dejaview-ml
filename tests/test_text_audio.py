@@ -51,6 +51,7 @@ def api():
     store.healthy.return_value = True
     store.search.return_value = [603]
     store.search_audio.return_value = [603]
+    store.search_text.return_value = [603]
     with TestClient(create_app(settings, encoders, store)) as client:
         yield client, encoders, store
 
@@ -61,8 +62,8 @@ def test_text_search(api, query):
     response = client.post("/v1/search/text", json={"query": query})
     assert response.status_code == 200
     assert response.json() == {"movie_ids": [603]}
-    assert store.search.call_args.args[0] == "text"
-    assert len(store.search.call_args.args[1][0]) == 768
+    vector, text = store.search_text.call_args.args
+    assert (len(vector), text) == (768, query)
 
 
 @pytest.mark.parametrize(
