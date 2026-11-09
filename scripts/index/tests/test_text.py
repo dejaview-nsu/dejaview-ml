@@ -31,14 +31,14 @@ def test_film_gets_overview_and_metadata_points():
     assert all(fragment.offset_sec is None for fragment in fragments)
     assert encoders.texts == [
         movie.overview,
-        "Жанр: драма, триллер. Год: 1999, 1990-е. Страна: США, Germany. "
+        "Жанр: драма, триллер. Год: 1999, 1990-е. Страна: США, Germany. Режиссёр: David Fincher. "
         "В ролях: Edward Norton (The Narrator); Brad Pitt (Tyler Durden).",
     ]
 
 
 def test_point_is_skipped_when_its_fields_are_empty():
     movie = sample_movie(550)
-    no_metadata = replace(movie, genres=[], release_date=None, countries=[], actors=[])
+    no_metadata = replace(movie, genres=[], release_date=None, countries=[], crew=[], actors=[])
     assert [fragment.source for fragment in embed_text(TextLog(), no_metadata)] == ["overview"]
     assert [fragment.source for fragment in embed_text(TextLog(), replace(movie, overview=""))] == ["metadata"]
 
