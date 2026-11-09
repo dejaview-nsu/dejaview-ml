@@ -62,6 +62,9 @@ def metadata_passage(movie: Any) -> str | None:
         parts.append(f"Год: {year}, {year // 10 * 10}-е.")
     if movie.countries:
         parts.append("Страна: " + ", ".join(c.name for c in movie.countries) + ".")
+    directors = [member.name for member in movie.crew if member.role == "director"]
+    if directors:
+        parts.append("Режиссёр: " + ", ".join(directors) + ".")
     actors = [
         f"{a.name} ({a.character})" if a.character else a.name
         for a in movie.actors[:METADATA_ACTORS]
@@ -100,6 +103,13 @@ TEMPORAL_CANDIDATES = 100
 # the film's sound) and by its dialogue (the transcript among the film's transcribed lines) -
 # and adds them.
 CLAP_WEIGHT = 2.0
+# A text query may be a quote: its dialogue line counts (shared meaningful words, as for audio)
+# only if it is at least as close to the query as the film's best description. Tested on 291
+# queries over 117 films (26 with dialogue): quotes from subtitles in another translation than
+# the dub are found first in 51/72 instead of 4/72, while descriptions, directors and taglines
+# keep 102 of 179 first answers, as without dialogue. Without the closeness condition, generic
+# words ("фильм", "работа", "человек") pulled 44 of them to random lines.
+TEXT_LIMIT = 10
 SPEECH_CANDIDATES = 50
 
 SPEECH_WORD_WEIGHT = 0.5
@@ -113,7 +123,7 @@ STOP_WORDS = frozenset(
     тот того той тем всё все всех весь вся всем очень может можно надо нужно будет буду будем
     хорошо ладно ну ага пока хватит знаю знаешь думаю хочу хочешь давай почему зачем сейчас здесь
     теперь потом тогда просто всегда никогда ничего сам сама себя себе него неё нее этого этом
-    этой""".split()
+    этой""".replace("ё", "е").split()
 )
 
 
@@ -157,10 +167,11 @@ def temporal_aggregate(
 
 def word_stems(text: str) -> set[str]:
     """Meaningful words, crudely stemmed: Russian endings change with case and tense, the first
-    letters rarely do. Common words and words shorter than 3 letters are dropped."""
+    letters rarely do. Common words and words shorter than 3 letters are dropped. "ё" is read as
+    "е": Whisper and people write it either way."""
     return {
         word[:STEM_LENGTH]
-        for word in re.findall(r"\w+", text.lower())
+        for word in re.findall(r"\w+", text.lower().replace("ё", "е"))
         if len(word) >= 3 and word not in STOP_WORDS
     }
 
@@ -187,6 +198,18 @@ def speech_scores(hits: list[models.ScoredPoint], transcript: str) -> dict[int, 
         score = hit.score + SPEECH_WORD_WEIGHT * words
         totals[movie_id] = max(totals.get(movie_id, score), score)
     return totals
+
+
+def text_ranking(text: dict[int, float], speech: dict[int, float]) -> list[int]:
+    """text: per-film best similarity to its description or metadata; speech: dialogue score of
+    films whose line matched the query as a quote. A quoted film the description candidates
+    missed gets the weakest description score among them."""
+    floor = min(text.values(), default=0.0)
+    totals = {
+        movie_id: text.get(movie_id, floor) + speech.get(movie_id, 0.0)
+        for movie_id in text.keys() | speech.keys()
+    }
+    return sorted(totals, key=lambda movie_id: (-totals[movie_id], movie_id))
 
 
 def audio_ranking(clap: dict[int, float], speech: dict[int, float]) -> list[int]:
@@ -272,6 +295,19 @@ class VectorStore:
         if modality == "text":
             return aggregate(nearest[: self.settings.top_k], limit=10, combine="max")
         return aggregate(nearest[: self.settings.top_k], limit=1)
+
+    async def search_text(self, vector: list[float], query: str) -> list[int]:
+        """Films by description and metadata, with quoted dialogue raised to the top."""
+        text: dict[int, float] = {}
+        for point in await self._query("text", vector, self.settings.top_k):
+            movie_id = (point.payload or {}).get("movie_id")
+            if type(movie_id) is not int:
+                raise RuntimeError("Qdrant point has invalid movie_id")
+            text[movie_id] = max(text.get(movie_id, point.score), point.score)
+        best = max(text.values(), default=-1.0)
+        lines = await self._query(SPEECH_COLLECTION, vector, SPEECH_CANDIDATES)
+        speech = speech_scores([line for line in lines if line.score >= best], query)
+        return text_ranking(text, speech)[:TEXT_LIMIT]
 
     async def search_audio(self, query: AudioQuery) -> list[int]:
         """CLAP and dialogue scores added per film, see audio_ranking."""
