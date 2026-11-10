@@ -78,7 +78,7 @@ def create_app(
                     await asyncio.sleep(1)
 
             async def load_models():
-                for modality in ("image", "video", "text", "audio"):
+                for modality in ("image", "video", "text", "audio", "speech"):
                     state = app.state.encoders.states[modality]
                     if state == "loading":
                         try:
@@ -172,11 +172,21 @@ def create_app(
         async with app.state.inference_lock:
             if modality == "text":
                 vectors = await asyncio.to_thread(app.state.encoders.encode_text, query)
-            else:
-                vectors = await asyncio.to_thread(
-                    app.state.encoders.encode, modality, data, content_type
+                return {"movie_ids": await app.state.store.search(modality, vectors)}
+            if modality == "audio":
+                query = await asyncio.to_thread(
+                    app.state.encoders.encode_audio_query, data, content_type
                 )
-            return {"movie_ids": await app.state.store.search(modality, vectors)}
+                logger.debug(
+                    "request_id=%r speech transcript=%r",
+                    request.headers.get("x-request-id"),
+                    query.transcript,
+                )
+                return {"movie_ids": await app.state.store.search_audio(query)}
+            vectors, offsets = await asyncio.to_thread(
+                app.state.encoders.encode_query, modality, data, content_type
+            )
+            return {"movie_ids": await app.state.store.search(modality, vectors, offsets)}
 
     @app.post("/v1/search/image")
     async def image(request: Request):

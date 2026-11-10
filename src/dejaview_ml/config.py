@@ -17,6 +17,13 @@ REVISIONS = {
     "video": "d2f89850fec28ac1e5cd27db2f0b76d7491e61ce",
     "audio": "365dea6ef167def6676140ed93bbc43f84dabb28",
 }
+# Speech: Whisper turns an audio query into text, which is searched among indexed lines of
+# dialogue (transcribed from each film's soundtrack) with the text model. The collection
+# holds text-model vectors.
+SPEECH_COLLECTION = "speech"
+SPEECH_MODEL_ID = "openai/whisper-large-v3-turbo"
+SPEECH_REVISION = "41f01f3fe87f28c78e2fbf8b568835947dd65ed9"
+COLLECTIONS = {**DIMENSIONS, SPEECH_COLLECTION: DIMENSIONS["text"]}
 
 
 class Settings(BaseSettings):
@@ -40,6 +47,11 @@ class Settings(BaseSettings):
     video_enabled: bool = True
     text_enabled: bool = True
     audio_enabled: bool = True
+    # Needs text and audio as well: the transcript is encoded by the text model, and its
+    # matches are checked against the audio index.
+    speech_enabled: bool = True
+    speech_revision: str = SPEECH_REVISION
+    speech_language: str = "ru"
     text_revision: str = REVISIONS["text"]
     audio_revision: str = REVISIONS["audio"]
     image_revision: str = REVISIONS["image"]

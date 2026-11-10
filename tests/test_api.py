@@ -148,7 +148,13 @@ def test_health_states_and_empty_search(api):
     client, encoders, store = api
     assert client.get("/health").json() == {
         "status": "ok",
-        "models": {"text": "ready", "image": "ready", "video": "ready", "audio": "ready"},
+        "models": {
+            "text": "ready",
+            "image": "ready",
+            "video": "ready",
+            "audio": "ready",
+            "speech": "ready",
+        },
         "qdrant": "ok",
     }
     for state in ("loading", "failed"):
