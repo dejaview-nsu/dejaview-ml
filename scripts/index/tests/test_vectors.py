@@ -1,11 +1,14 @@
+from unittest.mock import Mock
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from qdrant_client import QdrantClient, models
 
-from dejaview_ml.config import DIMENSIONS
+from dejaview_ml.config import COLLECTIONS, DIMENSIONS
+from scripts.index.delete import delete_movie
 from scripts.index.embedding import Fragment
 from scripts.index.errors import IndexingError
+from scripts.index.metadata import MovieTable
 from scripts.index.vectors import UPSERT_BATCH_SIZE, VectorWriter, describe_qdrant_error
 
 pytestmark = pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
@@ -211,3 +214,72 @@ def test_empty_lines_keep_previous_index(speech_client):
     with pytest.raises(IndexingError, match="Нет реплик"):
         writer.replace_speech(603, [])
     assert len(movie_points(speech_client, "speech", 603)) == 1
+
+
+def test_delete_removes_all_modalities_and_preserves_other_movies(speech_client):
+    client = speech_client
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(3))
+    writer.replace_movie(550, fragments(2))
+    writer.replace_speech(603, [line(0), line(10)])
+    writer.replace_speech(550, [line(0)])
+
+    # Второй запуск и удаление неизвестного id тоже успешны.
+    for movie_id in (603, 603, 999):
+        writer.delete_movie(movie_id)
+        for name in COLLECTIONS:
+            assert movie_points(client, name, 603) == []
+            assert movie_points(client, name, 550)
+            result = client.query_points(name, query=[1.0] + [0.0] * (COLLECTIONS[name] - 1), limit=10)
+            assert {point.payload["movie_id"] for point in result.points} == {550}
+
+
+@pytest.mark.parametrize("missing", ["video", "speech"])
+def test_delete_tolerates_missing_collection(speech_client, missing):
+    client = speech_client
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(2))
+    writer.replace_speech(603, [line(0)])
+    client.delete_collection(missing)
+    writer.delete_movie(603)
+    writer.delete_movie(603)
+    assert not client.collection_exists(missing)
+    for name in COLLECTIONS.keys() - {missing}:
+        assert movie_points(client, name, 603) == []
+
+
+@pytest.mark.parametrize("failed_collection", ["image", "speech"])
+def test_delete_retry_after_partial_qdrant_failure(speech_client, monkeypatch, failed_collection):
+    client = speech_client
+    writer = VectorWriter(client, "memory")
+    movies = Mock(spec=MovieTable)
+    writer.replace_movie(603, fragments(2))
+    writer.replace_speech(603, [line(0), line(10)])
+    original_delete = client.delete
+
+    def fail_on_collection(*args, **kwargs):
+        if kwargs.get("collection_name") == failed_collection:
+            raise TimeoutError("timeout")
+        return original_delete(*args, **kwargs)
+
+    monkeypatch.setattr(client, "delete", fail_on_collection)
+    with pytest.raises(IndexingError, match=f"удаление фильма 603 из {failed_collection}"):
+        delete_movie(603, movies, writer)
+    movies.delete.assert_not_called()
+    assert movie_points(client, "text", 603) == []
+    assert movie_points(client, failed_collection, 603)
+
+    monkeypatch.setattr(client, "delete", original_delete)
+    delete_movie(603, movies, writer)
+    movies.delete.assert_called_once_with(603)
+    assert all(not movie_points(client, name, 603) for name in COLLECTIONS)
+
+
+def test_delete_requires_completion_and_waits(client, monkeypatch):
+    def acknowledge(**kwargs):
+        assert kwargs["wait"] is True
+        return models.UpdateResult(operation_id=1, status=models.UpdateStatus.ACKNOWLEDGED)
+
+    monkeypatch.setattr(client, "delete", acknowledge)
+    with pytest.raises(IndexingError, match="не подтвердил завершение"):
+        VectorWriter(client, "memory").delete_movie(603)

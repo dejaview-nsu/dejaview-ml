@@ -4,7 +4,7 @@ from typing import TypeVar
 
 from qdrant_client import QdrantClient, models
 
-from dejaview_ml.config import DIMENSIONS, SPEECH_COLLECTION
+from dejaview_ml.config import COLLECTIONS, DIMENSIONS, SPEECH_COLLECTION
 from dejaview_ml.storage import TEXT_SOURCES, point_id, point_payload
 from scripts.index.embedding import Fragment
 from scripts.index.errors import IndexingError
@@ -51,6 +51,22 @@ class VectorWriter:
         for name in fragments:
             self._call(f"удаление старых точек из {name}", lambda name=name: self._delete_movie(name, movie_id))
         return {name: self._write(name, movie_id, movie_fragments) for name, movie_fragments in fragments.items()}
+
+    def delete_movie(self, movie_id: int) -> None:
+        """Удалить все точки фильма, включая модальности, выключенные в ML-сервисе."""
+        for name in COLLECTIONS:
+            exists = self._call(f"проверка коллекции {name}", lambda name=name: self._client.collection_exists(name))
+            if not exists:
+                logger.info("%s: коллекция отсутствует, точек фильма %d нет", name, movie_id)
+                continue
+            result = self._call(
+                f"удаление фильма {movie_id} из {name}", lambda name=name: self._delete_movie(name, movie_id)
+            )
+            if result.status != models.UpdateStatus.COMPLETED:
+                raise IndexingError(
+                    f"Qdrant не подтвердил завершение удаления фильма {movie_id} из {name}: {result.status}"
+                )
+            logger.info("%s: точки фильма %d удалены", name, movie_id)
 
     def update_text(self, movie_id: int, fragments: list[Fragment]) -> int:
         """Точки text без удаления фильма (contracts/backend-ml.md, «Коллекция text», «Индексация»): upsert
@@ -112,8 +128,8 @@ class VectorWriter:
         logger.info("%s: записано %d точек", name, len(points))
         return len(points)
 
-    def _delete_movie(self, collection: str, movie_id: int) -> None:
-        self._client.delete(
+    def _delete_movie(self, collection: str, movie_id: int) -> models.UpdateResult:
+        return self._client.delete(
             collection_name=collection,
             points_selector=models.FilterSelector(
                 filter=models.Filter(
