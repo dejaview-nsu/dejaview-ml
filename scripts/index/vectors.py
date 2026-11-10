@@ -52,6 +52,22 @@ class VectorWriter:
             self._call(f"удаление старых точек из {name}", lambda name=name: self._delete_movie(name, movie_id))
         return {name: self._write(name, movie_id, movie_fragments) for name, movie_fragments in fragments.items()}
 
+    def delete_movie(self, movie_id: int) -> None:
+        """Удалить все точки фильма, включая модальности, выключенные в ML-сервисе."""
+        for name in DIMENSIONS:
+            exists = self._call(f"проверка коллекции {name}", lambda name=name: self._client.collection_exists(name))
+            if not exists:
+                logger.info("%s: коллекция отсутствует, точек фильма %d нет", name, movie_id)
+                continue
+            result = self._call(
+                f"удаление фильма {movie_id} из {name}", lambda name=name: self._delete_movie(name, movie_id)
+            )
+            if result.status != models.UpdateStatus.COMPLETED:
+                raise IndexingError(
+                    f"Qdrant не подтвердил завершение удаления фильма {movie_id} из {name}: {result.status}"
+                )
+            logger.info("%s: точки фильма %d удалены", name, movie_id)
+
     def update_text(self, movie_id: int, fragments: list[Fragment]) -> int:
         """Точки text без удаления фильма (contracts/backend-ml.md, «Коллекция text», «Индексация»): upsert
         по ID, затем удаление по ID точек, которых больше нет. Если запись упадёт, у фильма останутся прежние
@@ -79,8 +95,8 @@ class VectorWriter:
         logger.info("%s: записано %d точек", name, len(points))
         return len(points)
 
-    def _delete_movie(self, collection: str, movie_id: int) -> None:
-        self._client.delete(
+    def _delete_movie(self, collection: str, movie_id: int) -> models.UpdateResult:
+        return self._client.delete(
             collection_name=collection,
             points_selector=models.FilterSelector(
                 filter=models.Filter(

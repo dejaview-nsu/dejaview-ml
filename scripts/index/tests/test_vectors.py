@@ -146,3 +146,59 @@ def test_text_update_removes_point_that_is_no_longer_produced(client):
     (overview,) = movie_points(client, "text", 603)
     assert overview.id == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
     assert len(movie_points(client, "text", 550)) == 2
+
+
+def test_delete_removes_all_modalities_and_preserves_other_movies(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(3))
+    writer.replace_movie(550, fragments(2))
+
+    # Второй запуск и удаление неизвестного id тоже успешны.
+    for movie_id in (603, 603, 999):
+        writer.delete_movie(movie_id)
+        for name in DIMENSIONS:
+            assert movie_points(client, name, 603) == []
+            assert movie_points(client, name, 550)
+            result = client.query_points(name, query=fragments(1)[name][0].vector, limit=10)
+            assert {point.payload["movie_id"] for point in result.points} == {550}
+
+
+def test_delete_tolerates_missing_collection(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(2))
+    client.delete_collection("video")
+    writer.delete_movie(603)
+    assert not client.collection_exists("video")
+    for name in ("text", "image", "audio"):
+        assert movie_points(client, name, 603) == []
+
+
+def test_delete_retry_after_partial_qdrant_failure(client, monkeypatch):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(603, fragments(2))
+    original_delete = client.delete
+
+    def fail_on_image(*args, **kwargs):
+        if kwargs.get("collection_name") == "image":
+            raise TimeoutError("timeout")
+        return original_delete(*args, **kwargs)
+
+    monkeypatch.setattr(client, "delete", fail_on_image)
+    with pytest.raises(IndexingError, match="удаление фильма 603 из image"):
+        writer.delete_movie(603)
+    assert movie_points(client, "text", 603) == []
+    assert movie_points(client, "image", 603)
+
+    monkeypatch.setattr(client, "delete", original_delete)
+    writer.delete_movie(603)
+    assert all(not movie_points(client, name, 603) for name in DIMENSIONS)
+
+
+def test_delete_requires_completion_and_waits(client, monkeypatch):
+    def acknowledge(**kwargs):
+        assert kwargs["wait"] is True
+        return models.UpdateResult(operation_id=1, status=models.UpdateStatus.ACKNOWLEDGED)
+
+    monkeypatch.setattr(client, "delete", acknowledge)
+    with pytest.raises(IndexingError, match="не подтвердил завершение"):
+        VectorWriter(client, "memory").delete_movie(603)
