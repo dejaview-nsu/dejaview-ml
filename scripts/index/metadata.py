@@ -126,6 +126,12 @@ class MovieTable:
         with self._connect() as connection:
             connection.execute("UPDATE movies SET indexed_at = NULL WHERE movie_id = %s", (movie_id,))
 
+    def delete(self, movie_id: int) -> bool:
+        """Удалить строку movies; связанные данные удаляются внешними ключами ON DELETE CASCADE."""
+        with self._connect() as connection:
+            cursor = connection.execute("DELETE FROM movies WHERE movie_id = %s", (movie_id,))
+            return cursor.rowcount > 0
+
     def mark_indexed(self, movie_id: int) -> None:
         with self._connect() as connection:
             cursor = connection.execute("UPDATE movies SET indexed_at = now() WHERE movie_id = %s", (movie_id,))

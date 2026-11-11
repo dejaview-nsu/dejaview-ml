@@ -26,14 +26,14 @@ class Settings:
     ml: MlSettings
 
 
-def load_settings(env_file: Path | None) -> Settings:
+def load_settings(env_file: Path | None, *, require_tmdb: bool = True) -> Settings:
     if env_file is not None and not env_file.is_file():
         raise ConfigError(f"Файл окружения не найден: {env_file}")
     load_dotenv(env_file or DEFAULT_ENV_FILE, override=False)
 
     access_token = _read_text("TMDB_ACCESS_TOKEN")
     api_key = _read_text("TMDB_API_KEY")
-    if access_token is None and api_key is None:
+    if require_tmdb and access_token is None and api_key is None:
         raise ConfigError("Не задан ключ TMDB: укажите TMDB_ACCESS_TOKEN или TMDB_API_KEY")
     database_url = _read_text("DATABASE_URL")
     if database_url is None:
@@ -43,8 +43,10 @@ def load_settings(env_file: Path | None) -> Settings:
     return Settings(
         tmdb_access_token=access_token,
         tmdb_api_key=api_key,
-        tmdb_requests_per_second=_read_number(
-            "TMDB_REQUESTS_PER_SECOND", DEFAULT_REQUESTS_PER_SECOND, 0, MAX_REQUESTS_PER_SECOND
+        tmdb_requests_per_second=(
+            _read_number("TMDB_REQUESTS_PER_SECOND", DEFAULT_REQUESTS_PER_SECOND, 0, MAX_REQUESTS_PER_SECOND)
+            if require_tmdb
+            else DEFAULT_REQUESTS_PER_SECOND
         ),
         database_url=database_url,
         work_dir=_read_work_dir(),

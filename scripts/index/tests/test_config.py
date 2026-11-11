@@ -83,3 +83,14 @@ def test_work_dir_must_not_be_a_file(env, monkeypatch, tmp_path):
 def test_missing_env_file(env, tmp_path):
     with pytest.raises(ConfigError, match="Файл окружения не найден"):
         load_settings(tmp_path / "missing.env")
+
+
+def test_deletion_does_not_require_tmdb_credentials(env, monkeypatch):
+    monkeypatch.delenv("TMDB_ACCESS_TOKEN")
+    settings = load_settings(env, require_tmdb=False)
+    assert settings.tmdb_access_token is None
+    assert settings.tmdb_api_key is None
+    assert settings.database_url == "postgresql://localhost/dejaview"
+    # Обычная индексация по-прежнему требует ключ.
+    with pytest.raises(ConfigError, match="Не задан ключ TMDB"):
+        load_settings(env)
