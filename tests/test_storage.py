@@ -430,7 +430,7 @@ def text_hit(id, movie, score):
     return models.ScoredPoint(id=id, version=1, score=score, payload={"movie_id": movie})
 
 
-def text_store(text_hits, speech_hits):
+def text_store(text_hits, speech_hits, **settings):
     client = AsyncMock()
 
     async def query_points(collection_name, limit, **_):
@@ -438,7 +438,7 @@ def text_store(text_hits, speech_hits):
         return QueryResponse(points=list(points)[:limit])
 
     client.query_points.side_effect = query_points
-    return VectorStore(Settings(_env_file=None), client), client
+    return VectorStore(Settings(_env_file=None, **settings), client), client
 
 
 async def test_text_search_raises_quoted_film_to_the_top():
@@ -471,3 +471,32 @@ async def test_text_search_returns_ten_films():
     descriptions = [text_hit(id, id, 0.9 - id / 100) for id in range(1, 15)]
     store, _ = text_store(descriptions, [])
     assert await store.search_text([1.0], "фильм") == list(range(1, 11))
+
+
+@pytest.mark.parametrize(("score", "expected"), [(0.80, []), (0.90, [603])])
+async def test_quote_must_clear_the_text_threshold(score, expected):
+    # The text threshold has cut every description off: a line below it gives nothing either.
+    lines = [speech_hit(603, 460, score, "Следуй за белым кроликом")]
+    store, _ = text_store([], lines, score_threshold_text=0.85)
+    assert await store.search_text([1.0], "Иди за белым кроликом") == expected
+
+
+@pytest.mark.parametrize(
+    ("runner_up", "expected"),
+    [(0.85, [603, 550]), (0.88, [550])],
+)
+async def test_foreign_quote_counts_when_its_film_stands_out(runner_up, expected):
+    # "Follow the white rabbit" shares no word with the Russian dub: only similarity can tell.
+    descriptions = [text_hit(1, 550, 0.78)]
+    lines = [
+        speech_hit(603, 460, 0.89, "Следуй за белым кроликом"),
+        speech_hit(680, 100, runner_up, "Композитор Эйрон Зигмен"),
+    ]
+    store, _ = text_store(descriptions, lines)
+    assert await store.search_text([1.0], "Follow the white rabbit") == expected
+
+
+def test_query_language():
+    assert storage.foreign_query("Follow the white rabbit")
+    assert not storage.foreign_query("Иди за белым кроликом")
+    assert not storage.foreign_query("фильм с Keanu Reeves про симуляцию")

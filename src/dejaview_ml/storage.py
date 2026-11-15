@@ -103,12 +103,20 @@ TEMPORAL_CANDIDATES = 100
 # the film's sound) and by its dialogue (the transcript among the film's transcribed lines) -
 # and adds them.
 CLAP_WEIGHT = 2.0
-# A text query may be a quote: its dialogue line counts (shared meaningful words, as for audio)
-# only if it is at least as close to the query as the film's best description. Tested on 291
-# queries over 117 films (26 with dialogue): quotes from subtitles in another translation than
-# the dub are found first in 51/72 instead of 4/72, while descriptions, directors and taglines
-# keep 102 of 179 first answers, as without dialogue. Without the closeness condition, generic
-# words ("фильм", "работа", "человек") pulled 44 of them to random lines.
+# A text query may be a quote. Its policy is separate from the audio one (speech_scores): a query
+# in Russian, the language of the dub, counts its line by shared meaningful words, and only if the
+# line is at least as close to the query as the film's best description or the text threshold.
+# Tested on 291 queries over 117 films (26 with dialogue): quotes from subtitles in another
+# translation than the dub are found first in 51/72 instead of 4/72, while descriptions,
+# directors and taglines keep 102 of 179 first answers, as without dialogue. Without the
+# closeness condition, generic words ("фильм", "работа", "человек") pulled 44 of them to random
+# lines.
+# A query in another language (an English quote, #17152) shares no words with the Russian lines,
+# and is closer to junk lines (credits, names) than to descriptions. Its film counts only if its
+# best line is ahead of every other film's best line by FOREIGN_QUOTE_GAP: on 59 English queries
+# 7 of 26 quotes are found first, none of 12 quotes from films without dialogue nor of 21
+# descriptions is taken over (0.02 took one).
+FOREIGN_QUOTE_GAP = 0.025
 TEXT_LIMIT = 10
 SPEECH_CANDIDATES = 50
 
@@ -198,6 +206,32 @@ def speech_scores(hits: list[models.ScoredPoint], transcript: str) -> dict[int, 
         score = hit.score + SPEECH_WORD_WEIGHT * words
         totals[movie_id] = max(totals.get(movie_id, score), score)
     return totals
+
+
+def foreign_query(query: str) -> bool:
+    """Not in Russian, the language of the dialogue: more Latin letters than Cyrillic."""
+    latin = len(re.findall(r"[a-z]", query, re.IGNORECASE))
+    return latin > len(re.findall(r"[а-яё]", query, re.IGNORECASE))
+
+
+def quote_scores(lines: list[models.ScoredPoint], query: str, gate: float) -> dict[int, float]:
+    """Films whose dialogue line the text query quotes; gate: the least similarity a line needs
+    (the best description, or the text threshold if higher). See FOREIGN_QUOTE_GAP."""
+    if not foreign_query(query):
+        return speech_scores([line for line in lines if line.score >= gate], query)
+    best: dict[int, float] = {}
+    for line in lines:
+        movie_id = (line.payload or {}).get("movie_id")
+        if type(movie_id) is not int:
+            raise RuntimeError("Qdrant point has invalid movie_id")
+        best[movie_id] = max(best.get(movie_id, line.score), line.score)
+    ranked = sorted(best, key=lambda movie_id: (-best[movie_id], movie_id))
+    if not ranked or best[ranked[0]] < gate:
+        return {}
+    runner_up = best[ranked[1]] if len(ranked) > 1 else -1.0
+    if best[ranked[0]] - runner_up < FOREIGN_QUOTE_GAP:
+        return {}
+    return {ranked[0]: best[ranked[0]]}
 
 
 def text_ranking(text: dict[int, float], speech: dict[int, float]) -> list[int]:
@@ -304,10 +338,14 @@ class VectorStore:
             if type(movie_id) is not int:
                 raise RuntimeError("Qdrant point has invalid movie_id")
             text[movie_id] = max(text.get(movie_id, point.score), point.score)
-        best = max(text.values(), default=-1.0)
+        # A line must clear what a description has to: the best one found, and the text threshold
+        # itself when it has cut every description off.
+        gate = max(text.values(), default=-1.0)
+        threshold = self.settings.threshold("text")
+        if threshold is not None:
+            gate = max(gate, threshold)
         lines = await self._query(SPEECH_COLLECTION, vector, SPEECH_CANDIDATES)
-        speech = speech_scores([line for line in lines if line.score >= best], query)
-        return text_ranking(text, speech)[:TEXT_LIMIT]
+        return text_ranking(text, quote_scores(lines, query, gate))[:TEXT_LIMIT]
 
     async def search_audio(self, query: AudioQuery) -> list[int]:
         """CLAP and dialogue scores added per film, see audio_ranking."""
