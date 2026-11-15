@@ -214,9 +214,12 @@ def foreign_query(query: str) -> bool:
     return latin > len(re.findall(r"[а-яё]", query, re.IGNORECASE))
 
 
-def quote_scores(lines: list[models.ScoredPoint], query: str, gate: float) -> dict[int, float]:
+def quote_scores(
+    lines: list[models.ScoredPoint], query: str, gate: float, limit: int
+) -> dict[int, float]:
     """Films whose dialogue line the text query quotes; gate: the least similarity a line needs
-    (the best description, or the text threshold if higher). See FOREIGN_QUOTE_GAP."""
+    (the best description, or the text threshold if higher); limit: how many lines were asked
+    for. See FOREIGN_QUOTE_GAP."""
     if not foreign_query(query):
         return speech_scores([line for line in lines if line.score >= gate], query)
     best: dict[int, float] = {}
@@ -229,6 +232,8 @@ def quote_scores(lines: list[models.ScoredPoint], query: str, gate: float) -> di
     if not ranked or best[ranked[0]] < gate:
         return {}
     runner_up = best[ranked[1]] if len(ranked) > 1 else -1.0
+    if len(lines) >= limit:
+        runner_up = max(runner_up, min(line.score for line in lines))
     if best[ranked[0]] - runner_up < FOREIGN_QUOTE_GAP:
         return {}
     return {ranked[0]: best[ranked[0]]}
@@ -345,7 +350,7 @@ class VectorStore:
         if threshold is not None:
             gate = max(gate, threshold)
         lines = await self._query(SPEECH_COLLECTION, vector, SPEECH_CANDIDATES)
-        return text_ranking(text, quote_scores(lines, query, gate))[:TEXT_LIMIT]
+        return text_ranking(text, quote_scores(lines, query, gate, SPEECH_CANDIDATES))[:TEXT_LIMIT]
 
     async def search_audio(self, query: AudioQuery) -> list[int]:
         """CLAP and dialogue scores added per film, see audio_ranking."""

@@ -496,6 +496,19 @@ async def test_foreign_quote_counts_when_its_film_stands_out(runner_up, expected
     assert await store.search_text([1.0], "Follow the white rabbit") == expected
 
 
+@pytest.mark.parametrize(("last", "expected"), [(0.86, [603, 550]), (0.88, [550])])
+async def test_foreign_quote_gap_counts_lines_past_the_limit(last, expected):
+    # All 50 candidates are lines of one film: another film may be right past the limit,
+    # no closer than the last line returned.
+    descriptions = [text_hit(1, 550, 0.78)]
+    lines = [speech_hit(603, 460, 0.89, "Следуй за белым кроликом")]
+    more = range(1, storage.SPEECH_CANDIDATES)
+    lines += [speech_hit(603, 460 + n, last, "Кто там?") for n in more]
+    lines.append(speech_hit(680, 100, 0.85, "Композитор Эйрон Зигмен"))  # 51st, never returned
+    store, _ = text_store(descriptions, lines)
+    assert await store.search_text([1.0], "Follow the white rabbit") == expected
+
+
 def test_query_language():
     assert storage.foreign_query("Follow the white rabbit")
     assert not storage.foreign_query("Иди за белым кроликом")
