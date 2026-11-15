@@ -63,6 +63,11 @@ def test_metadata_passage_matches_contract_example():
         genres=named("боевик", "фантастика"),
         release_date=date(1999, 3, 31),
         countries=named("США"),
+        crew=[
+            SimpleNamespace(name="Лана Вачовски", role="director"),
+            SimpleNamespace(name="Джоэл Сильвер", role="producer"),
+            SimpleNamespace(name="Лилли Вачовски", role="director"),
+        ],
         actors=[
             actor("Киану Ривз", "Neo"),
             actor("Лоренс Фишберн", "Morpheus"),
@@ -71,18 +76,19 @@ def test_metadata_passage_matches_contract_example():
         ],
     )
     assert metadata_passage(movie) == (
-        "Жанр: боевик, фантастика. Год: 1999, 1990-е. Страна: США. В ролях: Киану Ривз (Neo); "
+        "Жанр: боевик, фантастика. Год: 1999, 1990-е. Страна: США. "
+        "Режиссёр: Лана Вачовски, Лилли Вачовски. В ролях: Киану Ривз (Neo); "
         "Лоренс Фишберн (Morpheus); Кэрри-Энн Мосс (Trinity); Хьюго Уивинг (Agent Smith)."
     )
 
 
 def test_metadata_passage_skips_empty_fields_and_extra_actors():
     actors = [actor(f"Актёр {number}") for number in range(15)]
-    movie = SimpleNamespace(genres=[], release_date=None, countries=[], actors=actors)
+    movie = SimpleNamespace(genres=[], release_date=None, countries=[], crew=[], actors=actors)
     passage = metadata_passage(movie)
     assert passage.startswith("В ролях: Актёр 0; Актёр 1;")
     assert passage.endswith("Актёр 9.")
-    empty = SimpleNamespace(genres=[], release_date=None, countries=[], actors=[])
+    empty = SimpleNamespace(genres=[], release_date=None, countries=[], crew=[], actors=[])
     assert metadata_passage(empty) is None
 
 
@@ -334,6 +340,11 @@ def test_shared_words_ignore_common_words():
     assert storage.shared_words("Ну всё, пока!", "Пока-пока") == 0.0
 
 
+def test_yo_and_ye_are_the_same_letter():
+    assert storage.word_stems("Я вижу мёртвых людей") == storage.word_stems("я вижу мертвых людей")
+    assert storage.shared_words("Мы найдём способ", "Мы найдем способ, как всегда") == 1.0
+
+
 def test_speech_scores_need_meaningful_shared_words():
     hits = [
         speech_hit(120, 10000, 0.88, "Выследите их, не останавливайтесь"),  # nothing shared
@@ -413,3 +424,92 @@ async def test_audio_search_without_matching_dialogue_is_clap(query, lines):
     audio = [timed_hit(1, 6977, 100, 0.80), timed_hit(2, 603, 455, 0.76)]
     store, _ = speech_store(audio, lines)
     assert await store.search_audio(query) == [6977]
+
+
+def text_hit(id, movie, score):
+    return models.ScoredPoint(id=id, version=1, score=score, payload={"movie_id": movie})
+
+
+def text_store(text_hits, speech_hits, **settings):
+    client = AsyncMock()
+
+    async def query_points(collection_name, limit, **_):
+        points = speech_hits if collection_name == "speech" else text_hits
+        return QueryResponse(points=list(points)[:limit])
+
+    client.query_points.side_effect = query_points
+    return VectorStore(Settings(_env_file=None, **settings), client), client
+
+
+async def test_text_search_raises_quoted_film_to_the_top():
+    descriptions = [text_hit(1, 550, 0.80), text_hit(2, 680, 0.79), text_hit(3, 550, 0.78)]
+    lines = [speech_hit(603, 460, 0.86, "Следуй за белым кроликом. Кто там?")]
+    store, client = text_store(descriptions, lines)
+    assert await store.search_text([1.0], "Иди за белым кроликом") == [603, 550, 680]
+    collections = [call.kwargs["collection_name"] for call in client.query_points.call_args_list]
+    assert collections == ["text", "speech"]
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        # A line sharing words, but farther from the query than the best description.
+        [speech_hit(603, 460, 0.79, "Хакер узнаёт, что мир - компьютерная симуляция")],
+        # Close, but sharing only one meaningful word of five.
+        [speech_hit(603, 460, 0.90, "Это симуляция")],
+        [],
+    ],
+)
+async def test_text_search_without_quote_ranks_by_description(lines):
+    descriptions = [text_hit(1, 550, 0.80), text_hit(2, 680, 0.79), text_hit(3, 603, 0.70)]
+    store, _ = text_store(descriptions, lines)
+    query = "хакер узнаёт, что мир - компьютерная симуляция"
+    assert await store.search_text([1.0], query) == [550, 680, 603]
+
+
+async def test_text_search_returns_ten_films():
+    descriptions = [text_hit(id, id, 0.9 - id / 100) for id in range(1, 15)]
+    store, _ = text_store(descriptions, [])
+    assert await store.search_text([1.0], "фильм") == list(range(1, 11))
+
+
+@pytest.mark.parametrize(("score", "expected"), [(0.80, []), (0.90, [603])])
+async def test_quote_must_clear_the_text_threshold(score, expected):
+    # The text threshold has cut every description off: a line below it gives nothing either.
+    lines = [speech_hit(603, 460, score, "Следуй за белым кроликом")]
+    store, _ = text_store([], lines, score_threshold_text=0.85)
+    assert await store.search_text([1.0], "Иди за белым кроликом") == expected
+
+
+@pytest.mark.parametrize(
+    ("runner_up", "expected"),
+    [(0.85, [603, 550]), (0.88, [550])],
+)
+async def test_foreign_quote_counts_when_its_film_stands_out(runner_up, expected):
+    # "Follow the white rabbit" shares no word with the Russian dub: only similarity can tell.
+    descriptions = [text_hit(1, 550, 0.78)]
+    lines = [
+        speech_hit(603, 460, 0.89, "Следуй за белым кроликом"),
+        speech_hit(680, 100, runner_up, "Композитор Эйрон Зигмен"),
+    ]
+    store, _ = text_store(descriptions, lines)
+    assert await store.search_text([1.0], "Follow the white rabbit") == expected
+
+
+@pytest.mark.parametrize(("last", "expected"), [(0.86, [603, 550]), (0.88, [550])])
+async def test_foreign_quote_gap_counts_lines_past_the_limit(last, expected):
+    # All 50 candidates are lines of one film: another film may be right past the limit,
+    # no closer than the last line returned.
+    descriptions = [text_hit(1, 550, 0.78)]
+    lines = [speech_hit(603, 460, 0.89, "Следуй за белым кроликом")]
+    more = range(1, storage.SPEECH_CANDIDATES)
+    lines += [speech_hit(603, 460 + n, last, "Кто там?") for n in more]
+    lines.append(speech_hit(680, 100, 0.85, "Композитор Эйрон Зигмен"))  # 51st, never returned
+    store, _ = text_store(descriptions, lines)
+    assert await store.search_text([1.0], "Follow the white rabbit") == expected
+
+
+def test_query_language():
+    assert storage.foreign_query("Follow the white rabbit")
+    assert not storage.foreign_query("Иди за белым кроликом")
+    assert not storage.foreign_query("фильм с Keanu Reeves про симуляцию")
