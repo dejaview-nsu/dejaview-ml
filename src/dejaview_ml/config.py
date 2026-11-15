@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     ffmpeg_timeout_seconds: float = Field(default=10, gt=0)
     body_read_timeout_seconds: float = Field(default=30, gt=0)
     torch_threads: int = Field(default=4, ge=1)
+    # how many requests may wait for one model, and how long one request may wait in all.
+    inference_slots: int = Field(default=2, ge=1)
+    inference_queue_limit: int = Field(default=16, ge=0)
+    inference_wait_seconds: float = Field(default=5, ge=0)
 
     def threshold(self, modality: str) -> float | None:
         name = f"score_threshold_{modality}"

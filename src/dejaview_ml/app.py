@@ -8,8 +8,9 @@ import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from dejaview_ml.capacity import DECODING, Capacity
 from dejaview_ml.config import Settings
-from dejaview_ml.embeddings import Encoders
+from dejaview_ml.embeddings import AudioQuery, Encoders
 from dejaview_ml.errors import MlError
 from dejaview_ml.media import LIMITS, MEDIA_TYPES, parse_text_query
 from dejaview_ml.query import strip_framing
@@ -62,7 +63,11 @@ def create_app(
     async def lifespan(app: FastAPI):
         app.state.encoders = encoders or Encoders(settings)
         app.state.store = store or VectorStore(settings)
-        app.state.inference_lock = asyncio.Lock()
+        app.state.capacity = Capacity(
+            settings.inference_slots,
+            settings.inference_queue_limit,
+            settings.inference_wait_seconds,
+        )
         task = None
         try:
             # Retry cold Qdrant startup, but never recreate an incompatible collection.
@@ -168,27 +173,35 @@ def create_app(
             text_query=modality == "text",
         )
         query = parse_text_query(data) if modality == "text" else None
-        if app.state.inference_lock.locked():
-            raise MlError(503, "NOT_READY", "inference capacity is occupied; retry later")
-        async with app.state.inference_lock:
-            if modality == "text":
-                query = strip_framing(query)
-                vectors = await asyncio.to_thread(app.state.encoders.encode_text, query)
-                return {"movie_ids": await app.state.store.search_text(vectors[0], query)}
-            if modality == "audio":
-                query = await asyncio.to_thread(
-                    app.state.encoders.encode_audio_query, data, content_type
-                )
-                logger.debug(
-                    "request_id=%r speech transcript=%r",
-                    request.headers.get("x-request-id"),
-                    query.transcript,
-                )
-                return {"movie_ids": await app.state.store.search_audio(query)}
-            vectors, offsets = await asyncio.to_thread(
-                app.state.encoders.encode_query, modality, data, content_type
-            )
+        # Only model runs and decoding wait in the queues; Qdrant is queried after them.
+        encoders, capacity = app.state.encoders, app.state.capacity
+        budget = capacity.budget()
+        if modality == "text":
+            query = strip_framing(query)
+            vectors = await capacity.run("text", budget, encoders.encode_text, query)
+            return {"movie_ids": await app.state.store.search_text(vectors[0], query)}
+        decoded = await capacity.run(
+            DECODING, budget, encoders.decode_query, modality, data, content_type
+        )
+        vectors, offsets = await capacity.run(
+            modality, budget, encoders.embed_query, modality, decoded
+        )
+        if modality != "audio":
             return {"movie_ids": await app.state.store.search(modality, vectors, offsets)}
+        transcript, speech_vector = "", None
+        if encoders.speech_ready():
+            transcript = await capacity.run("speech", budget, encoders.transcribe_query, decoded)
+            if transcript:
+                speech_vector = await capacity.run(
+                    "text", budget, encoders.encode_transcript, transcript
+                )
+        logger.debug(
+            "request_id=%r speech transcript=%r",
+            request.headers.get("x-request-id"),
+            transcript,
+        )
+        audio = AudioQuery(vectors, offsets, transcript, speech_vector)
+        return {"movie_ids": await app.state.store.search_audio(audio)}
 
     @app.post("/v1/search/image")
     async def image(request: Request):
