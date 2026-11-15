@@ -11,6 +11,7 @@ import numpy as np
 
 from dejaview_ml.embeddings import SPEECH_RATE, Encoders
 from scripts.index.slicing import FfmpegError, read_ffmpeg
+from scripts.index.validation import AudioInfo
 
 # Whisper слушает по 30 с; несколько кусков за раз заметно быстрее на GPU.
 CHUNK_SEC = 30
@@ -41,14 +42,14 @@ class SpeechWindow:
     text: str
 
 
-def transcribe_film(encoders: Encoders, source: Path, duration_sec: float, temp_dir: Path) -> list[Cue]:
-    """Реплики звуковой дорожки фильма с временем от начала файла."""
+def transcribe_film(encoders: Encoders, source: Path, audio: AudioInfo, temp_dir: Path) -> list[Cue]:
+    """Реплики звуковой дорожки audio.audio_stream (той же, что у индексации audio) с временем от начала файла."""
     started = time.monotonic()
     cues: list[Cue] = []
-    expected = max(1, int(duration_sec // CHUNK_SEC) + 1)
+    expected = max(1, int(audio.duration_sec // CHUNK_SEC) + 1)
     next_report = PROGRESS_STEP_PERCENT
     done = 0
-    with closing(_chunks(source, temp_dir)) as chunks:
+    with closing(_chunks(source, audio.audio_stream, temp_dir)) as chunks:
         batch: list[tuple[float, np.ndarray]] = []
         for offset, chunk in chunks:
             done += 1
@@ -71,8 +72,9 @@ def transcribe_film(encoders: Encoders, source: Path, duration_sec: float, temp_
     return cues
 
 
-def _chunks(source: Path, temp_dir: Path) -> Iterator[tuple[float, np.ndarray]]:
-    args = ["-threads", "1", "-i", str(source.resolve()), "-vn", "-sn", "-dn", "-ac", "1"]
+def _chunks(source: Path, audio_stream: int, temp_dir: Path) -> Iterator[tuple[float, np.ndarray]]:
+    args = ["-threads", "1", "-i", str(source.resolve()), "-map", f"0:{audio_stream}", "-vn", "-sn", "-dn"]
+    args += ["-ac", "1"]
     args += ["-ar", str(SPEECH_RATE), "-f", "f32le", "pipe:1"]
     for index, chunk in enumerate(read_ffmpeg(args, CHUNK_SEC * SPEECH_RATE * 4, temp_dir)):
         if len(chunk) % 4:

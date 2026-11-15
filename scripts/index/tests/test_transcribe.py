@@ -4,6 +4,7 @@ import pytest
 from scripts.index import transcribe
 from scripts.index.errors import IndexingError
 from scripts.index.transcribe import Cue, speech_windows
+from scripts.index.validation import AudioInfo
 
 RATE = 16_000
 
@@ -26,9 +27,9 @@ def test_cues_are_timed_from_film_start_and_silence_is_skipped(monkeypatch, tmp_
     # Ten chunks, the third silent: nine go to Whisper in batches of eight and one.
     levels = [0.1] * 10
     levels[2] = 0.0
-    monkeypatch.setattr(transcribe, "_chunks", lambda source, temp_dir: chunks(levels))
+    monkeypatch.setattr(transcribe, "_chunks", lambda source, stream, temp_dir: chunks(levels))
     encoders = FakeEncoders()
-    cues = transcribe.transcribe_film(encoders, tmp_path / "film.mp4", 300, tmp_path)
+    cues = transcribe.transcribe_film(encoders, tmp_path / "film.mp4", AudioInfo(300, 1), tmp_path)
     assert encoders.batches == [8, 1]
     assert cues[0] == Cue(1.0, 4.0, "реплика 1.0")
     assert [cue.start_sec for cue in cues[:3]] == [1.0, 31.0, 91.0]  # 61 s: silence
@@ -36,9 +37,9 @@ def test_cues_are_timed_from_film_start_and_silence_is_skipped(monkeypatch, tmp_
 
 
 def test_film_without_speech_is_an_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(transcribe, "_chunks", lambda source, temp_dir: chunks([0.0, 0.0]))
+    monkeypatch.setattr(transcribe, "_chunks", lambda source, stream, temp_dir: chunks([0.0, 0.0]))
     with pytest.raises(IndexingError, match="ни одной реплики"):
-        transcribe.transcribe_film(FakeEncoders(), tmp_path / "film.mp4", 60, tmp_path)
+        transcribe.transcribe_film(FakeEncoders(), tmp_path / "film.mp4", AudioInfo(60, 1), tmp_path)
 
 
 def test_speech_windows_overlap_so_any_ten_seconds_fit_in_one():
@@ -49,3 +50,17 @@ def test_speech_windows_overlap_so_any_ten_seconds_fit_in_one():
         (20, "четыре пять шесть"),
         # 30 s and 40 s: only "да", too short to identify a film.
     ]
+
+
+def test_whisper_hears_the_same_track_as_clap(monkeypatch, tmp_path):
+    # A file with two dubs: CLAP indexes the first audio stream, Whisper must not pick another one.
+    seen = []
+
+    def read_ffmpeg(args, size, temp_dir):
+        seen.append(args)
+        return iter([])
+
+    monkeypatch.setattr(transcribe, "read_ffmpeg", read_ffmpeg)
+    list(transcribe._chunks(tmp_path / "film.mp4", 2, tmp_path))
+    (args,) = seen
+    assert args[args.index("-map") + 1] == "0:2"

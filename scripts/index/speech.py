@@ -10,7 +10,6 @@
 
 import argparse
 import logging
-import subprocess
 import sys
 import tempfile
 import time
@@ -21,7 +20,7 @@ from dotenv import load_dotenv
 
 from dejaview_ml.embeddings import Encoders
 from scripts.index import vectors
-from scripts.index.cli import ExitCode, _movie_id, _use_utf8_output, configure_logging, describe_error
+from scripts.index.cli import ExitCode, configure_logging, describe_error, parse_movie_id, use_utf8_output
 from scripts.index.config import (
     DEFAULT_ENV_FILE,
     DEFAULT_QDRANT_TIMEOUT_SECONDS,
@@ -32,12 +31,13 @@ from scripts.index.config import (
 from scripts.index.embedding import load_model
 from scripts.index.errors import ConfigError, UnsuitableFileError
 from scripts.index.transcribe import speech_windows, transcribe_film
+from scripts.index.validation import probe_audio
 
 logger = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> int:
-    _use_utf8_output()
+    use_utf8_output()
     args = parse_args(argv)
     configure_logging(verbose=args.verbose)
     try:
@@ -62,12 +62,14 @@ def run(args: argparse.Namespace) -> None:
     encoders = Encoders(ml)
     load_model(encoders, "speech")
     with tempfile.TemporaryDirectory(prefix=f"speech-{args.movie_id}-") as temp_dir:
-        cues = transcribe_film(encoders, args.transcribe, _duration(args.transcribe), Path(temp_dir))
+        cues = transcribe_film(encoders, args.transcribe, probe_audio(args.transcribe), Path(temp_dir))
     windows = speech_windows(cues)
+    if not windows:
+        raise UnsuitableFileError(f"В {args.transcribe} не нашлось реплик длиннее двух слов: записывать нечего")
     logger.info(
         "Окон по 20 с: %d, с %s по %s", len(windows), _clock(windows[0].offset_sec), _clock(windows[-1].offset_sec)
     )
-    if args.dry_run:
+    if args.dry_run is not None:
         for window in windows[: args.dry_run]:
             print(f"{_clock(window.offset_sec)}  {window.text}")
         return
@@ -100,7 +102,7 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         prog="python -m scripts.index.speech",
         description="Распознаёт реплики фильма Whisper по озвучке и индексирует их в коллекцию speech",
     )
-    parser.add_argument("--movie-id", type=_movie_id, required=True, help="id фильма в TMDB, например 603")
+    parser.add_argument("--movie-id", type=parse_movie_id, required=True, help="id фильма в TMDB, например 603")
     parser.add_argument(
         "--transcribe",
         type=_video,
@@ -110,10 +112,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--dry-run",
-        type=int,
+        type=_positive,
         nargs="?",
         const=20,
-        default=0,
+        default=None,
         metavar="N",
         help="ничего не записывать, показать первые N окон (по умолчанию 20)",
     )
@@ -128,17 +130,14 @@ def _video(raw_value: str) -> Path:
     return Path(raw_value)
 
 
-def _duration(path: Path) -> float:
-    probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+def _positive(raw_value: str) -> int:
     try:
-        return float(probe.stdout)
+        value = int(raw_value)
     except ValueError:
-        raise UnsuitableFileError(f"ffprobe не прочитал длительность {path}: {probe.stderr.strip()}") from None
+        value = 0
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"нужно целое число больше нуля, получено: {raw_value}")
+    return value
 
 
 def _clock(seconds: int) -> str:

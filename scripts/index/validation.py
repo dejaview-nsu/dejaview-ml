@@ -83,6 +83,26 @@ def probe_video(path: Path) -> VideoInfo:
     )
 
 
+@dataclass(frozen=True)
+class AudioInfo:
+    duration_sec: float
+    audio_stream: int
+
+
+def probe_audio(path: Path) -> AudioInfo:
+    """Звуковая дорожка, которую слушает индексация audio (первая, как в probe_video), и длительность.
+    Для реплик: CLAP и Whisper должны слышать одну и ту же озвучку многодорожечного файла."""
+    if not path.is_file():
+        raise ConfigError(f"Видеофайл не найден: {path}")
+    metadata = _run_ffprobe(path)
+    audio = _first_stream(metadata.get("streams") or [], "audio")
+    duration = _as_float((metadata.get("format") or {}).get("duration"))
+    if audio is None or duration is None or duration <= 0:
+        problem = "нет звуковой дорожки" if audio is None else "не удалось определить длительность"
+        raise UnsuitableFileError(f"Файл {path} не подходит для распознавания реплик: {problem}")
+    return AudioInfo(duration_sec=duration, audio_stream=int(audio["index"]))
+
+
 def _run_ffprobe(path: Path) -> dict[str, Any]:
     args = [
         "ffprobe",

@@ -80,14 +80,17 @@ class VectorWriter:
         return len(points)
 
     def replace_speech(self, movie_id: int, windows: list[tuple[int, str, list[float]]]) -> int:
-        """windows: (offset_sec, text, vector). Old dialogue of the film is replaced entirely."""
+        """windows: (offset_sec, text, vector). Points are written by stable IDs first; only then the
+        film's points that are no longer produced are deleted. If a batch fails, the film keeps its
+        previous or already new lines instead of an empty or partial index."""
         name = SPEECH_COLLECTION
+        if not windows:
+            raise IndexingError(f"Нет реплик фильма {movie_id}: прежние реплики в {name} оставлены")
         if not self._call(f"проверка коллекции {name}", lambda: self._client.collection_exists(name)):
             raise IndexingError(
                 f"В Qdrant ({self._url}) нет коллекции «{name}». Её создаёт ML-сервис новой версии при старте: "
                 "перезапустите его или проверьте ML_QDRANT_URL"
             )
-        self._call(f"удаление старых точек из {name}", lambda: self._delete_movie(name, movie_id))
         points = [
             models.PointStruct(
                 id=point_id(name, movie_id, offset),
@@ -99,6 +102,13 @@ class VectorWriter:
         for start in range(0, len(points), UPSERT_BATCH_SIZE):
             batch = points[start : start + UPSERT_BATCH_SIZE]
             self._call(f"запись в {name}", lambda batch=batch: self._client.upsert(name, batch, wait=True))
+        stale = models.FilterSelector(
+            filter=models.Filter(
+                must=[models.FieldCondition(key="movie_id", match=models.MatchValue(value=movie_id))],
+                must_not=[models.HasIdCondition(has_id=[point.id for point in points])],
+            )
+        )
+        self._call(f"удаление устаревших точек из {name}", lambda: self._client.delete(name, stale, wait=True))
         logger.info("%s: записано %d точек", name, len(points))
         return len(points)
 
