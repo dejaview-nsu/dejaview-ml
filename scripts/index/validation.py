@@ -9,12 +9,13 @@ from typing import Any
 
 from scripts.index.errors import ConfigError, UnsuitableFileError
 
-MAX_WIDTH = 854
+# RUTUBE отдаёт 480p как 856×480: два лишних пикселя не повод пережимать весь фильм.
+MAX_WIDTH = 856
 MAX_HEIGHT = 480
 PROBE_TIMEOUT_SECONDS = 60
 STDERR_PREVIEW_LENGTH = 300
 REENCODE_HINT = (
-    'ffmpeg -i in.mkv -map 0:v:0 -map 0:a:0 -c:v libx264 -c:a aac -vf "scale=854:480:'
+    'ffmpeg -i in.mkv -map 0:v:0 -map 0:a:0 -c:v libx264 -c:a aac -vf "scale=856:480:'
     'force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1" out.mp4'
 )
 
@@ -80,6 +81,26 @@ def probe_video(path: Path) -> VideoInfo:
         height=int(video["height"]),
         sample_aspect_ratio=_sample_aspect_ratio(video.get("sample_aspect_ratio")),
     )
+
+
+@dataclass(frozen=True)
+class AudioInfo:
+    duration_sec: float
+    audio_stream: int
+
+
+def probe_audio(path: Path) -> AudioInfo:
+    """Звуковая дорожка, которую слушает индексация audio (первая, как в probe_video), и длительность.
+    Для реплик: CLAP и Whisper должны слышать одну и ту же озвучку многодорожечного файла."""
+    if not path.is_file():
+        raise ConfigError(f"Видеофайл не найден: {path}")
+    metadata = _run_ffprobe(path)
+    audio = _first_stream(metadata.get("streams") or [], "audio")
+    duration = _as_float((metadata.get("format") or {}).get("duration"))
+    if audio is None or duration is None or duration <= 0:
+        problem = "нет звуковой дорожки" if audio is None else "не удалось определить длительность"
+        raise UnsuitableFileError(f"Файл {path} не подходит для распознавания реплик: {problem}")
+    return AudioInfo(duration_sec=duration, audio_stream=int(audio["index"]))
 
 
 def _run_ffprobe(path: Path) -> dict[str, Any]:

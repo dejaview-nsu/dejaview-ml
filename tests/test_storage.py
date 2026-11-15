@@ -17,6 +17,7 @@ from dejaview_ml.storage import (
     metadata_passage,
     point_id,
     point_payload,
+    temporal_aggregate,
 )
 
 
@@ -110,6 +111,46 @@ def test_text_film_score_is_its_best_point():
     points = [hit(1, 1, 0.80), hit(2, 1, 0.79), hit(3, 2, 0.85)]
     assert aggregate(points, limit=2) == [1, 2]
     assert aggregate(points, limit=2, combine="max") == [2, 1]
+
+
+def timed_hit(id, movie, offset, score):
+    return models.ScoredPoint(
+        id=id, version=1, score=score, payload={"movie_id": movie, "offset_sec": offset}
+    )
+
+
+def test_temporal_aggregation_prefers_matches_that_line_up_in_time():
+    # Film 1: one window at 28:10, then 28:20, 28:30 - the query read in order.
+    # Film 2: stronger single hits, but scattered over the film.
+    windows = [
+        (0, [timed_hit(1, 2, 300, 0.9), timed_hit(2, 1, 1690, 0.8)]),
+        (10, [timed_hit(3, 2, 4000, 0.9), timed_hit(4, 1, 1700, 0.8)]),
+        (20, [timed_hit(5, 2, 50, 0.9), timed_hit(6, 1, 1710, 0.8)]),
+    ]
+    assert aggregate([point for _, points in windows for point in points]) == [2]
+    assert temporal_aggregate(windows, tolerance=10) == [1]
+
+
+def test_temporal_aggregation_counts_one_hit_per_window_and_breaks_ties():
+    windows = [
+        (0, [timed_hit(1, 1, 100, 0.5), timed_hit(2, 1, 105, 0.6), timed_hit(3, 2, 100, 0.6)]),
+        (5, [timed_hit(4, 2, 105, 0.5), timed_hit(5, 1, 400, 0.9)]),
+    ]
+    # Film 1: best aligned pair is 0.6 (the 0.9 hit is 300 s away); film 2: 0.6 + 0.5.
+    assert temporal_aggregate(windows, tolerance=10, limit=2) == [2, 1]
+    tie = [(0, [timed_hit(1, 7, 0, 0.5), timed_hit(2, 3, 0, 0.5)])]
+    assert temporal_aggregate(tie, tolerance=10, limit=2) == [3, 7]
+
+
+async def test_timed_query_with_offsets_uses_temporal_aggregation():
+    client = AsyncMock()
+    client.query_points.side_effect = [
+        QueryResponse(points=[timed_hit(1, 2, 300, 0.9), timed_hit(2, 1, 1690, 0.8)]),
+        QueryResponse(points=[timed_hit(3, 2, 4000, 0.9), timed_hit(4, 1, 1700, 0.8)]),
+    ]
+    store = VectorStore(Settings(_env_file=None, top_k=2), client)
+    assert await store.search("audio", [[1.0] * 512, [1.0] * 512], [0, 10]) == [1]
+    assert client.query_points.call_args.kwargs["limit"] == storage.TEMPORAL_CANDIDATES
 
 
 @pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
@@ -265,3 +306,110 @@ async def test_text_search_ranks_films_by_best_point():
     )
     store = VectorStore(Settings(_env_file=None), client)
     assert await store.search("text", [[1.0] * 768]) == [20, 10]
+
+
+def speech_hit(movie, offset, score, text):
+    return models.ScoredPoint(
+        id=point_id("speech", movie, offset),
+        version=1,
+        score=score,
+        payload={"movie_id": movie, "type": "speech", "offset_sec": offset, "text": text},
+    )
+
+
+def test_speech_point_has_offset():
+    assert point_payload("speech", 603, 1680) == {
+        "movie_id": 603,
+        "type": "speech",
+        "offset_sec": 1680,
+    }
+
+
+def test_shared_words_ignore_common_words():
+    # "живете" and "жили" differ in their first five letters; "мире", "мир", "таков" match;
+    # "Вы", "в" are too short and "сейчас" is a common word.
+    transcript, line = "Вы живете в мире, таков мир сейчас", "Вы жили в мире. Таков мир сейчас"
+    assert storage.word_stems(transcript) == {"живет", "мире", "мир", "таков"}
+    assert storage.shared_words(transcript, line) == 0.75
+    assert storage.shared_words("Ну всё, пока!", "Пока-пока") == 0.0
+
+
+def test_speech_scores_need_meaningful_shared_words():
+    hits = [
+        speech_hit(120, 10000, 0.88, "Выследите их, не останавливайтесь"),  # nothing shared
+        speech_hit(597, 2690, 0.83, "Держись за белым кораблём"),  # 1 of 3: below a third
+        speech_hit(603, 460, 0.82, "Следуй за белым кроликом. Кто там?"),  # 2 of 3 words
+    ]
+    scores = storage.speech_scores(hits, "Иди за белым кроликом")
+    assert set(scores) == {603}
+    assert scores[603] == pytest.approx(0.82 + storage.SPEECH_WORD_WEIGHT * 2 / 3)
+    # A transcript of common words only says nothing about the film.
+    assert storage.speech_scores(hits, "Ну всё, пока!") == {}
+
+
+def test_audio_ranking_adds_clap_and_dialogue():
+    clap = {6977: 0.80, 603: 0.75, 550: 0.70}
+    assert storage.audio_ranking(clap, {}) == [6977, 603, 550]
+    # The dialogue outweighs a small CLAP lead...
+    assert storage.audio_ranking(clap, {603: 0.9})[0] == 603
+    # ...and a film absent from the CLAP candidates gets the weakest CLAP score, not zero.
+    assert storage.audio_ranking(clap, {120: 0.9})[0] == 120
+    assert storage.audio_ranking({}, {}) == []
+
+
+def audio_query(speech_vector=(1.0,), transcript="Иди за белым кроликом"):
+    from dejaview_ml.embeddings import AudioQuery
+
+    return AudioQuery(
+        vectors=[[1.0, 0.0], [0.0, 1.0]],
+        offsets=[0.0, 2.5],
+        transcript=transcript,
+        speech_vector=list(speech_vector) if speech_vector else None,
+    )
+
+
+def speech_store(audio_hits, speech_hits):
+    client = AsyncMock()
+
+    async def query_points(collection_name, limit, **_):
+        points = speech_hits if collection_name == "speech" else audio_hits
+        return QueryResponse(points=list(points)[:limit])
+
+    client.query_points.side_effect = query_points
+    return VectorStore(Settings(_env_file=None), client), client
+
+
+async def test_audio_search_combines_clap_and_dialogue():
+    audio = [timed_hit(1, 6977, 100, 0.80), timed_hit(2, 603, 455, 0.76)]
+    store, client = speech_store(audio, [speech_hit(603, 460, 0.82, "Следуй за белым кроликом")])
+    assert await store.search_audio(audio_query()) == [603]
+    calls = client.query_points.call_args_list
+    assert [call.kwargs["collection_name"] for call in calls] == ["audio", "audio", "speech"]
+    assert calls[0].kwargs["limit"] == storage.TEMPORAL_CANDIDATES
+
+
+async def test_audio_threshold_applies_to_clap_but_not_to_dialogue():
+    # A phone recording rarely clears the CLAP threshold; the dialogue still finds the film.
+    store, client = speech_store([], [speech_hit(603, 460, 0.82, "Следуй за белым кроликом")])
+    assert await store.search_audio(audio_query()) == [603]
+    used = {
+        call.kwargs["collection_name"]: call.kwargs["score_threshold"]
+        for call in client.query_points.call_args_list
+    }
+    assert used == {"audio": Settings(_env_file=None).score_threshold_audio, "speech": None}
+
+
+@pytest.mark.parametrize(
+    ("query", "lines"),
+    [
+        # Nothing recognised: CLAP alone.
+        (audio_query(speech_vector=None, transcript=""), []),
+        # Recognised, but no line shares its meaningful words.
+        (audio_query(), [speech_hit(120, 10000, 0.88, "Выследите их")]),
+        (audio_query(transcript="Да, да, конечно"), [speech_hit(120, 10, 0.9, "Да, конечно")]),
+    ],
+)
+async def test_audio_search_without_matching_dialogue_is_clap(query, lines):
+    audio = [timed_hit(1, 6977, 100, 0.80), timed_hit(2, 603, 455, 0.76)]
+    store, _ = speech_store(audio, lines)
+    assert await store.search_audio(query) == [6977]

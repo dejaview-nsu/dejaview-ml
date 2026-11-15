@@ -6,7 +6,7 @@ from qdrant_client import QdrantClient, models
 from dejaview_ml.config import DIMENSIONS
 from scripts.index.embedding import Fragment
 from scripts.index.errors import IndexingError
-from scripts.index.vectors import VectorWriter, describe_qdrant_error
+from scripts.index.vectors import UPSERT_BATCH_SIZE, VectorWriter, describe_qdrant_error
 
 pytestmark = pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
 
@@ -146,3 +146,68 @@ def test_text_update_removes_point_that_is_no_longer_produced(client):
     (overview,) = movie_points(client, "text", 603)
     assert overview.id == str(uuid5(NAMESPACE_URL, "dejaview:text:603"))
     assert len(movie_points(client, "text", 550)) == 2
+
+
+def test_replace_speech_keeps_line_text_and_replaces_old_lines(client):
+    client.create_collection("speech", vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE))
+    writer = VectorWriter(client, "memory")
+    vector = [1.0] + [0.0] * 767
+    assert writer.replace_speech(603, [(1680, "Она с тобой на работе", vector), (1690, "Какую правду?", vector)]) == 2
+    assert writer.replace_speech(603, [(1680, "Матрица повсюду", vector)]) == 1
+    (point,) = movie_points(client, "speech", 603)
+    assert point.payload == {"movie_id": 603, "type": "speech", "offset_sec": 1680, "text": "Матрица повсюду"}
+    assert point.id == str(uuid5(NAMESPACE_URL, "dejaview:speech:603:1680"))
+
+
+def line(offset: int, text: str = "Матрица повсюду") -> tuple[int, str, list[float]]:
+    return offset, text, [1.0] + [0.0] * 767
+
+
+def test_replace_speech_requires_collection(client):
+    with pytest.raises(IndexingError, match="нет коллекции «speech»"):
+        VectorWriter(client, "memory").replace_speech(603, [line(0)])
+
+
+@pytest.fixture
+def speech_client(client):
+    client.create_collection("speech", vectors_config=models.VectorParams(size=768, distance=models.Distance.COSINE))
+    return client
+
+
+def test_replace_speech_keeps_other_films(speech_client):
+    writer = VectorWriter(speech_client, "memory")
+    writer.replace_speech(550, [line(0), line(10)])
+    writer.replace_speech(603, [line(0)])
+    writer.replace_speech(603, [line(10)])
+    assert [point.payload["offset_sec"] for point in movie_points(speech_client, "speech", 603)] == [10]
+    assert len(movie_points(speech_client, "speech", 550)) == 2
+
+
+def test_failed_write_keeps_previous_lines(speech_client):
+    writer = VectorWriter(speech_client, "memory")
+    writer.replace_speech(603, [line(offset, "прежняя реплика") for offset in range(0, 30, 10)])
+    upsert = speech_client.upsert
+    calls = []
+
+    def failing_upsert(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise TimeoutError
+        return upsert(*args, **kwargs)
+
+    speech_client.upsert = failing_upsert
+    new_lines = [line(offset, "новая реплика") for offset in range(0, 10 * (UPSERT_BATCH_SIZE + 1), 10)]
+    with pytest.raises(IndexingError, match="запись в speech"):
+        writer.replace_speech(603, new_lines)
+    points = movie_points(speech_client, "speech", 603)
+    # The first batch is written, the second failed: no old point was deleted.
+    assert {point.payload["offset_sec"] for point in points} >= {0, 10, 20}
+    assert len(points) >= 3
+
+
+def test_empty_lines_keep_previous_index(speech_client):
+    writer = VectorWriter(speech_client, "memory")
+    writer.replace_speech(603, [line(0)])
+    with pytest.raises(IndexingError, match="Нет реплик"):
+        writer.replace_speech(603, [])
+    assert len(movie_points(speech_client, "speech", 603)) == 1

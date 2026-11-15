@@ -5,7 +5,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from dejaview_ml.config import MODEL_IDS
+from dejaview_ml.config import MODEL_IDS, SPEECH_MODEL_ID
 from dejaview_ml.embeddings import Encoders
 from dejaview_ml.storage import metadata_passage
 from scripts.catalog.movies.model import Movie
@@ -71,12 +71,13 @@ def embed_movie(
 
 
 def load_model(encoders: Encoders, modality: str) -> None:
-    logger.info("%s: загрузка модели %s (первый запуск скачивает веса)", modality, MODEL_IDS[modality])
+    model_id = SPEECH_MODEL_ID if modality == "speech" else MODEL_IDS[modality]
+    logger.info("%s: загрузка модели %s (первый запуск скачивает веса)", modality, model_id)
     try:
         encoders.load(modality)
     except Exception as error:
         raise IndexingError(
-            f"Не удалось загрузить модель {MODEL_IDS[modality]}: {error}. Проверьте ML_CACHE_DIR, "
+            f"Не удалось загрузить модель {model_id}: {error}. Проверьте ML_CACHE_DIR, "
             "ML_LOCAL_FILES_ONLY и доступ к huggingface.co"
         ) from error
 

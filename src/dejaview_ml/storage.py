@@ -1,10 +1,12 @@
+import re
 from collections import defaultdict
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from qdrant_client import AsyncQdrantClient, models
 
-from dejaview_ml.config import DIMENSIONS, Settings
+from dejaview_ml.config import COLLECTIONS, DIMENSIONS, SPEECH_COLLECTION, Settings
+from dejaview_ml.embeddings import AudioQuery
 from dejaview_ml.errors import MlError
 
 TEXT_SOURCES = ("overview", "metadata")
@@ -18,7 +20,7 @@ class SchemaMismatch(RuntimeError):
 def point_payload(
     modality: str, movie_id: int, offset_sec: int | None = None, source: str | None = None
 ) -> dict:
-    if modality not in DIMENSIONS or type(movie_id) is not int:
+    if modality not in COLLECTIONS or type(movie_id) is not int:
         raise ValueError("invalid modality or movie_id")
     if not -(2**63) <= movie_id < 2**63:
         raise ValueError("movie_id must fit int64")
@@ -89,6 +91,116 @@ def aggregate(
     return sorted(totals, key=lambda movie_id: (-totals[movie_id], movie_id))[:limit]
 
 
+# Matches of consecutive query windows must land at consecutive moments of the same film.
+# Tolerance covers the index grid: a query window rarely starts exactly on an indexed offset.
+TEMPORAL_TOLERANCE_SEC = {"video": 10.0, "audio": 10.0}
+TEMPORAL_CANDIDATES = 100
+
+# Audio search scores every film twice: by CLAP (how well the query windows line up in time with
+# the film's sound) and by its dialogue (the transcript among the film's transcribed lines) -
+# and adds them.
+CLAP_WEIGHT = 2.0
+SPEECH_CANDIDATES = 50
+
+SPEECH_WORD_WEIGHT = 0.5
+SPEECH_MIN_SHARED_WORDS = 0.34
+SPEECH_MIN_WORDS = 2
+STEM_LENGTH = 5
+STOP_WORDS = frozenset(
+    """что это как так вот ещё еще уже там тут где кто чем чего тебя тебе меня мне его ему её она
+    они оно мы вы ты он нас вас них ним нам вам был была было были быть есть нет да не ни но или
+    если когда тоже только даже ведь ваш ваша мой моя моё мое твой твоя наш наша свой этот эта эти
+    тот того той тем всё все всех весь вся всем очень может можно надо нужно будет буду будем
+    хорошо ладно ну ага пока хватит знаю знаешь думаю хочу хочешь давай почему зачем сейчас здесь
+    теперь потом тогда просто всегда никогда ничего сам сама себя себе него неё нее этого этом
+    этой""".split()
+)
+
+
+def temporal_scores(
+    windows: list[tuple[float, list[models.ScoredPoint]]], tolerance: float
+) -> dict[int, float]:
+    """windows: (query offset, hits) per query window.
+
+    A film scores the best sum of one hit per window whose film offset minus query offset
+    agrees within tolerance. Scattered look-alike fragments add up only if they line up in time.
+    """
+    hits: dict[int, list[tuple[int, float, float]]] = defaultdict(list)
+    for window, (query_offset, points) in enumerate(windows):
+        for point in points:
+            payload = point.payload or {}
+            movie_id, offset = payload.get("movie_id"), payload.get("offset_sec")
+            if type(movie_id) is not int or type(offset) is not int:
+                raise RuntimeError("Qdrant point has invalid movie_id or offset_sec")
+            hits[movie_id].append((window, offset - query_offset, point.score))
+    totals = {}
+    for movie_id, film_hits in hits.items():
+        best = 0.0
+        for _, anchor, _ in film_hits:
+            per_window: dict[int, float] = {}
+            for window, shift, score in film_hits:
+                if abs(shift - anchor) <= tolerance and score > per_window.get(window, -1.0):
+                    per_window[window] = score
+            best = max(best, sum(per_window.values()))
+        totals[movie_id] = best
+    return totals
+
+
+def temporal_aggregate(
+    windows: list[tuple[float, list[models.ScoredPoint]]],
+    tolerance: float,
+    limit: int = 1,
+) -> list[int]:
+    totals = temporal_scores(windows, tolerance)
+    return sorted(totals, key=lambda movie_id: (-totals[movie_id], movie_id))[:limit]
+
+
+def word_stems(text: str) -> set[str]:
+    """Meaningful words, crudely stemmed: Russian endings change with case and tense, the first
+    letters rarely do. Common words and words shorter than 3 letters are dropped."""
+    return {
+        word[:STEM_LENGTH]
+        for word in re.findall(r"\w+", text.lower())
+        if len(word) >= 3 and word not in STOP_WORDS
+    }
+
+
+def shared_words(transcript: str, line: str) -> float:
+    query = word_stems(transcript)
+    return len(query & word_stems(line)) / len(query) if query else 0.0
+
+
+def speech_scores(hits: list[models.ScoredPoint], transcript: str) -> dict[int, float]:
+    """Best dialogue match per film: text similarity plus shared words. Lines sharing too few
+    meaningful words with the transcript, and transcripts with too few of them, give nothing."""
+    if len(word_stems(transcript)) < SPEECH_MIN_WORDS:
+        return {}
+    totals: dict[int, float] = {}
+    for hit in hits:
+        payload = hit.payload or {}
+        movie_id = payload.get("movie_id")
+        if type(movie_id) is not int:
+            raise RuntimeError("Qdrant point has invalid movie_id")
+        words = shared_words(transcript, str(payload.get("text", "")))
+        if words < SPEECH_MIN_SHARED_WORDS:
+            continue
+        score = hit.score + SPEECH_WORD_WEIGHT * words
+        totals[movie_id] = max(totals.get(movie_id, score), score)
+    return totals
+
+
+def audio_ranking(clap: dict[int, float], speech: dict[int, float]) -> list[int]:
+    """clap: per-film CLAP score averaged over query windows; speech: dialogue score. A film the
+    CLAP candidates missed gets the weakest CLAP score among them, not zero: a phone recording
+    of speech often leaves the right film out of CLAP's nearest fragments altogether."""
+    floor = min(clap.values(), default=0.0)
+    totals = {
+        movie_id: CLAP_WEIGHT * clap.get(movie_id, floor) + speech.get(movie_id, 0.0)
+        for movie_id in clap.keys() | speech.keys()
+    }
+    return sorted(totals, key=lambda movie_id: (-totals[movie_id], movie_id))
+
+
 class VectorStore:
     def __init__(self, settings: Settings, client: AsyncQdrantClient | None = None):
         self.settings = settings
@@ -102,7 +214,7 @@ class VectorStore:
         )
 
     async def ensure_collections(self) -> None:
-        for name, size in DIMENSIONS.items():
+        for name, size in COLLECTIONS.items():
             if not await self.client.collection_exists(name):
                 await self.client.create_collection(
                     name,
@@ -130,26 +242,29 @@ class VectorStore:
     async def healthy(self) -> bool:
         try:
             names = {c.name for c in (await self.client.get_collections()).collections}
-            return set(DIMENSIONS) <= names
+            return set(COLLECTIONS) <= names
         except Exception:
             return False
 
-    async def search(self, modality: str, vectors: list[list[float]]) -> list[int]:
+    async def search(
+        self, modality: str, vectors: list[list[float]], offsets: list[float] | None = None
+    ) -> list[int]:
+        """offsets: start of each query window in seconds. With several windows of a timed
+        modality, films are ranked by time-consistent matches instead of a plain sum."""
+        if offsets is not None and len(vectors) > 1 and modality in TEMPORAL_TOLERANCE_SEC:
+            if len(offsets) != len(vectors):
+                raise ValueError("offsets must match vectors")
+            limit = max(self.settings.top_k, TEMPORAL_CANDIDATES)
+            windows = [
+                (offset, await self._query(modality, vector, limit))
+                for offset, vector in zip(offsets, vectors, strict=True)
+            ]
+            return temporal_aggregate(windows, TEMPORAL_TOLERANCE_SEC[modality])
+
         # Global top-K across query segments; duplicate point hits count only once.
         points: dict[str, models.ScoredPoint] = {}
         for vector in vectors:
-            try:
-                result = await self.client.query_points(
-                    collection_name=modality,
-                    query=vector,
-                    limit=self.settings.top_k,
-                    score_threshold=self.settings.threshold(modality),
-                    with_payload=True,
-                    with_vectors=False,
-                )
-            except Exception as exc:
-                raise MlError(503, "QDRANT_UNAVAILABLE", "Qdrant search failed") from exc
-            for point in result.points:
+            for point in await self._query(modality, vector, self.settings.top_k):
                 key = str(point.id)
                 if key not in points or point.score > points[key].score:
                     points[key] = point
@@ -157,6 +272,40 @@ class VectorStore:
         if modality == "text":
             return aggregate(nearest[: self.settings.top_k], limit=10, combine="max")
         return aggregate(nearest[: self.settings.top_k], limit=1)
+
+    async def search_audio(self, query: AudioQuery) -> list[int]:
+        """CLAP and dialogue scores added per film, see audio_ranking."""
+        windows = [
+            (offset, await self._query("audio", vector, TEMPORAL_CANDIDATES))
+            for offset, vector in zip(query.offsets, query.vectors, strict=True)
+        ]
+        clap = {
+            movie_id: score / len(windows)
+            for movie_id, score in temporal_scores(windows, TEMPORAL_TOLERANCE_SEC["audio"]).items()
+        }
+        speech: dict[int, float] = {}
+        if query.speech_vector is not None:
+            hits = await self._query(SPEECH_COLLECTION, query.speech_vector, SPEECH_CANDIDATES)
+            speech = speech_scores(hits, query.transcript)
+        return audio_ranking(clap, speech)[:1]
+
+    async def _query(
+        self, modality: str, vector: list[float], limit: int
+    ) -> list[models.ScoredPoint]:
+        # Dialogue lines have no similarity threshold: speech_scores filters them by shared words.
+        threshold = self.settings.threshold(modality) if modality in DIMENSIONS else None
+        try:
+            result = await self.client.query_points(
+                collection_name=modality,
+                query=vector,
+                limit=limit,
+                score_threshold=threshold,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            raise MlError(503, "QDRANT_UNAVAILABLE", "Qdrant search failed") from exc
+        return result.points
 
     async def close(self) -> None:
         await self.client.close()

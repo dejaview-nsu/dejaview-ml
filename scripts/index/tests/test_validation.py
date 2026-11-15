@@ -5,7 +5,7 @@ import pytest
 
 from scripts.index.errors import ConfigError, UnsuitableFileError
 from scripts.index.tests.videos import make_video, requires_ffmpeg
-from scripts.index.validation import probe_video
+from scripts.index.validation import probe_audio, probe_video
 
 pytestmark = requires_ffmpeg
 
@@ -21,6 +21,11 @@ def test_suitable_mp4(tmp_path):
 def test_widescreen_480p_is_accepted(tmp_path):
     info = probe_video(make_video(tmp_path / "scope.mp4", size="854x358"))
     assert (info.width, info.height) == (854, 358)
+
+
+def test_rutube_480p_is_accepted(tmp_path):
+    info = probe_video(make_video(tmp_path / "rutube.mp4", size="856x480"))
+    assert (info.width, info.height) == (856, 480)
 
 
 def test_anamorphic_sample_aspect_ratio(tmp_path):
@@ -76,3 +81,12 @@ def test_not_a_video(tmp_path):
 def test_missing_file_is_an_argument_error(tmp_path):
     with pytest.raises(ConfigError, match="не найден"):
         probe_video(tmp_path / "missing.mp4")
+
+
+def test_speech_uses_the_audio_track_of_video_indexing(tmp_path):
+    path = make_video(tmp_path / "movie.mp4")
+    audio = probe_audio(path)
+    assert audio.audio_stream == probe_video(path).audio_stream
+    assert audio.duration_sec == pytest.approx(12, abs=0.1)
+    with pytest.raises(UnsuitableFileError, match="нет звуковой дорожки"):
+        probe_audio(make_video(tmp_path / "silent.mp4", audio_codec=None))
