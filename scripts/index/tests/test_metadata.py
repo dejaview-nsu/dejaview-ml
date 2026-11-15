@@ -112,3 +112,45 @@ def test_movie_row_converts_back_to_movie():
     movie = sample_movie(550)
     # Так строку отдаёт psycopg: JSONB уже разобран в списки словарей.
     assert movie_from_row(asdict(movie)) == movie
+
+
+def test_delete_cascades_and_is_repeatable(database_url):
+    import psycopg  # noqa: PLC0415
+
+    # Минимальные связанные таблицы с теми же внешними ключами, что в db-schema.sql.
+    with psycopg.connect(database_url) as connection:
+        connection.execute(MOVIES_DDL.replace('COLLATE "ru-RU-x-icu" ', ""))
+        connection.execute("""
+            CREATE TABLE user_movie_lists (
+                movie_id bigint REFERENCES movies ON DELETE CASCADE
+            );
+            CREATE TABLE ratings (
+                movie_id bigint REFERENCES movies ON DELETE CASCADE
+            );
+            CREATE TABLE reviews (
+                review_id bigint PRIMARY KEY,
+                movie_id bigint REFERENCES movies ON DELETE CASCADE
+            );
+            CREATE TABLE review_reactions (
+                review_id bigint REFERENCES reviews ON DELETE CASCADE
+            );
+        """)
+    table = MovieTable(database_url)
+    table.upsert(sample_movie(550))
+    table.upsert(sample_movie(603))
+    with psycopg.connect(database_url) as connection:
+        connection.execute("INSERT INTO user_movie_lists VALUES (550), (603)")
+        connection.execute("INSERT INTO ratings VALUES (550), (603)")
+        connection.execute("INSERT INTO reviews VALUES (1, 550), (2, 603)")
+        connection.execute("INSERT INTO review_reactions VALUES (1), (2)")
+
+    assert table.delete(550) is True
+    assert table.delete(550) is False
+    assert table.delete(999) is False
+    assert table.load(550) is None
+    assert table.load(603) is not None
+    with psycopg.connect(database_url) as connection:
+        assert connection.execute("SELECT movie_id FROM user_movie_lists").fetchall() == [(603,)]
+        assert connection.execute("SELECT movie_id FROM ratings").fetchall() == [(603,)]
+        assert connection.execute("SELECT movie_id FROM reviews").fetchall() == [(603,)]
+        assert connection.execute("SELECT review_id FROM review_reactions").fetchall() == [(2,)]
