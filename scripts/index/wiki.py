@@ -28,7 +28,7 @@ USER_AGENT = "DejaViewIndexer/1.0 (https://github.com/dejaview-nsu/dejaview-ml) 
 SPARQL_BATCH = 100
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_ATTEMPTS = 4
-PAUSE_SECONDS = 0.2 
+PAUSE_SECONDS = 0.2
 
 CHUNK_WORDS = 150
 MAX_CHUNKS = 20
