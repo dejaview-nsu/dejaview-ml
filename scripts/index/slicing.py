@@ -10,23 +10,26 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+from dejaview_ml.video_sampling import (
+    VIDEO_FILTER,
+    VIDEO_FRAME_SIZE,
+    VIDEO_SEGMENT_FRAMES,
+    VIDEO_SEGMENT_SEC,
+)
 from scripts.index.errors import IndexingError
 from scripts.index.validation import VideoInfo
 
 IMAGE_STEP_SEC = 5
-VIDEO_SEGMENT_SEC = 10
 AUDIO_WINDOW_SEC = 10
 AUDIO_STEP_SEC = 5
 AUDIO_MIN_WINDOW_SEC = 1
 IMAGE_BATCH_SIZE = 32
 STDERR_PREVIEW_LENGTH = 500
 
-VIDEO_FRAME_SIZE = 224
 VIDEO_FRAME_BYTES = VIDEO_FRAME_SIZE * VIDEO_FRAME_SIZE * 3
-VIDEO_SEGMENT_FRAMES = 10
 VIDEO_OUTPUT_ARGS = [
     "-vf",
-    "fps=1:round=up,scale=224:224:force_original_aspect_ratio=increase:flags=bicubic,crop=224:224",
+    VIDEO_FILTER,
     "-f",
     "rawvideo",
     "-pix_fmt",

@@ -25,6 +25,16 @@ class CliEncoders(Encoders):
         return [1.0] + [0.0] * 511
 
 
+def test_cli_video_offsets_are_seconds(tmp_path, monkeypatch, capsys):
+    file = tmp_path / "clip.mp4"
+    file.write_bytes(b"video")
+    monkeypatch.setattr(cli, "Encoders", CliEncoders)
+    monkeypatch.setattr(CliEncoders, "encode", lambda *args: [[1.0] * 512] * 3)
+    monkeypatch.setattr(sys, "argv", ["dejaview-embed", "video", str(file), "--offset-sec", "120"])
+    cli.main()
+    assert json.loads(capsys.readouterr().out)["offsets_sec"] == [120, 121, 122]
+
+
 @pytest.mark.parametrize("modality", ["text", "audio"])
 def test_cli_upsert_uses_passage_prefix_and_correct_payload(
     tmp_path, monkeypatch, capsys, modality

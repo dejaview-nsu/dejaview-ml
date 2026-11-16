@@ -21,8 +21,9 @@ class VectorWriter:
         self._client = client
         self._url = url
 
-    def check_collections(self) -> None:
-        for name, size in DIMENSIONS.items():
+    def check_collections(self, names: tuple[str, ...] = tuple(DIMENSIONS)) -> None:
+        for name in names:
+            size = DIMENSIONS[name]
             if not self._call(f"проверка коллекции {name}", lambda name=name: self._client.collection_exists(name)):
                 raise IndexingError(
                     f"В Qdrant ({self._url}) нет коллекции «{name}». Коллекции создаёт ML-сервис при старте: "
@@ -84,6 +85,20 @@ class VectorWriter:
         if stale:
             selector = models.PointIdsList(points=stale)
             self._call("удаление устаревших точек text", lambda: self._client.delete("text", selector, wait=True))
+        return count
+
+    def update_video(self, movie_id: int, fragments: list[Fragment]) -> int:
+        """Перезаписать video по стабильным ID, после успешной записи убрать старый хвост."""
+        if not fragments:
+            raise IndexingError("Нет видеофрагментов: прежний видеоиндекс оставлен")
+        count = self._write("video", movie_id, fragments)
+        stale = models.FilterSelector(
+            filter=models.Filter(
+                must=[models.FieldCondition(key="movie_id", match=models.MatchValue(value=movie_id))],
+                must_not=[models.HasIdCondition(has_id=[point_id("video", movie_id, f.offset_sec) for f in fragments])],
+            )
+        )
+        self._call("удаление устаревших точек video", lambda: self._client.delete("video", stale, wait=True))
         return count
 
     def _write(self, name: str, movie_id: int, fragments: list[Fragment]) -> int:

@@ -32,7 +32,8 @@ def video_file(tmp_path, duration, extension="mp4"):
 
 
 @pytest.mark.parametrize(
-    ("duration", "segment_sizes"), [(0.2, [1]), (10, [10]), (12, [10, 2]), (30, [10, 10, 10])]
+    ("duration", "segment_sizes"),
+    [(0.2, [1]), (2.4, [1] * 3), (10, [1] * 10), (12, [1] * 12), (30, [1] * 30)],
 )
 def test_real_video_sampling(tmp_path, duration, segment_sizes):
     data = video_file(tmp_path, duration).read_bytes()

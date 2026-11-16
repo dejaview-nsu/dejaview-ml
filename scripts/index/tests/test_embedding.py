@@ -25,6 +25,9 @@ class FailingEncoders:
     def _encode_audio(self, window):
         return self._encode("audio")
 
+    def encode_video_frames(self, frames):
+        return [self._encode("video") for _ in frames]
+
     def _encode(self, modality):
         if modality == self.failing_modality:
             raise RuntimeError(f"{modality}: модель упала")

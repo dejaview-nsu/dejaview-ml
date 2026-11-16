@@ -50,6 +50,28 @@ def test_load_full_clip_checkpoint_as_vision_encoder(tmp_path, monkeypatch, moda
     assert encoders.states[modality] == "ready"
     assert len(actual) == 512
     np.testing.assert_allclose(actual, expected, atol=1e-6)
+    if modality == "video":
+        frames = [frame, Image.new("RGB", (224, 224), "blue")]
+        batch = encoders.encode_video_frames(frames)
+        assert len(batch) == 2
+        for image, vector in zip(frames, batch, strict=True):
+            np.testing.assert_allclose(vector, encoders._encode_frames("video", [image]), atol=1e-6)
+        assert not np.allclose(batch[0], batch[1])
+
+
+def test_video_query_encodes_each_second_and_preserves_offsets(monkeypatch):
+    from unittest.mock import Mock
+
+    frames = [Image.new("RGB", (224, 224), (i, 0, 0)) for i in range(30)]
+    monkeypatch.setattr("dejaview_ml.embeddings.decode_video", lambda *args: [[f] for f in frames])
+    encoders = Encoders(Settings(_env_file=None))
+    encoders.states["video"] = "ready"
+    encode = Mock(return_value=[[float(i)] for i in range(30)])
+    monkeypatch.setattr(encoders, "encode_video_frames", encode)
+    vectors, offsets = encoders.encode_query("video", b"video", "video/mp4")
+    assert vectors == [[float(i)] for i in range(30)]
+    assert offsets == list(range(30))
+    encode.assert_called_once_with(frames)
 
 
 def test_e5_loading_prefixes_masked_pooling_and_offline_reload(tmp_path, monkeypatch):
