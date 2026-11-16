@@ -66,6 +66,16 @@ def test_text_search(api, query):
     assert (len(vector), text) == (768, query)
 
 
+def test_text_search_drops_query_framing(api):
+    client, _, store = api
+    response = client.post(
+        "/v1/search/text",
+        json={"query": "Помню сцену, где волшебник падает с моста. Что это за фильм?"},
+    )
+    assert response.status_code == 200
+    assert store.search_text.call_args.args[1] == "волшебник падает с моста"
+
+
 @pytest.mark.parametrize(
     "body",
     [

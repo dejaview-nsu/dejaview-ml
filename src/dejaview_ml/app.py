@@ -12,6 +12,7 @@ from dejaview_ml.config import Settings
 from dejaview_ml.embeddings import Encoders
 from dejaview_ml.errors import MlError
 from dejaview_ml.media import LIMITS, MEDIA_TYPES, parse_text_query
+from dejaview_ml.query import strip_framing
 from dejaview_ml.storage import SchemaMismatch, VectorStore
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,7 @@ def create_app(
             raise MlError(503, "NOT_READY", "inference capacity is occupied; retry later")
         async with app.state.inference_lock:
             if modality == "text":
+                query = strip_framing(query)
                 vectors = await asyncio.to_thread(app.state.encoders.encode_text, query)
                 return {"movie_ids": await app.state.store.search_text(vectors[0], query)}
             if modality == "audio":

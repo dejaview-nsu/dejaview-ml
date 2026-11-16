@@ -23,6 +23,7 @@ class Fragment:
     offset_sec: int | None
     vector: list[float]
     source: str | None = None
+    chunk: int | None = None
 
 
 def embed_text(encoders: Encoders, movie: Movie) -> list[Fragment]:
@@ -35,6 +36,14 @@ def embed_text(encoders: Encoders, movie: Movie) -> list[Fragment]:
     if metadata:
         fragments.append(Fragment(None, encoders.encode_text(metadata, passage=True)[0], "metadata"))
     return fragments
+
+
+def embed_plot(encoders: Encoders, chunks: list[str]) -> list[Fragment]:
+    """Точки text с source=plot: куски сюжета из Википедии по порядку."""
+    return [
+        Fragment(None, encoders.encode_text(chunk, passage=True)[0], "plot", number)
+        for number, chunk in enumerate(chunks)
+    ]
 
 
 def embed_movie(

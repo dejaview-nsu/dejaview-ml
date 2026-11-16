@@ -280,9 +280,11 @@ def test_empty_threshold_variable_is_not_set(monkeypatch):
 async def test_search_uses_threshold_of_its_modality(modality, expected):
     client = AsyncMock()
     client.query_points.return_value = QueryResponse(points=[])
+    client.query_points_groups.return_value = models.GroupsResult(groups=[])
     store = VectorStore(Settings(_env_file=None), client)
     assert await store.search(modality, [[1.0] * DIMENSIONS[modality]]) == []
-    assert client.query_points.call_args.kwargs["score_threshold"] == expected
+    query = client.query_points_groups if modality == "text" else client.query_points
+    assert query.call_args.kwargs["score_threshold"] == expected
 
 
 @pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
@@ -301,17 +303,57 @@ async def test_points_below_threshold_give_empty_answer(tmp_path):
     await client.close()
 
 
+def film_groups(points, limit):
+    """What Qdrant query_points_groups(group_by="movie_id", group_size=1) returns for these hits."""
+    best = {}
+    for point in sorted(points, key=lambda point: -point.score):
+        best.setdefault(point.payload["movie_id"], point)
+    groups = [
+        models.PointGroup(id=movie, hits=[point]) for movie, point in list(best.items())[:limit]
+    ]
+    return models.GroupsResult(groups=groups)
+
+
 async def test_text_search_ranks_films_by_best_point():
     client = AsyncMock()
 
     def hit(id, movie, score):
         return models.ScoredPoint(id=id, version=1, score=score, payload={"movie_id": movie})
 
-    client.query_points.return_value = QueryResponse(
-        points=[hit(1, 10, 0.80), hit(2, 10, 0.79), hit(3, 20, 0.85)]
-    )
+    hits = [hit(1, 10, 0.80), hit(2, 10, 0.79), hit(3, 20, 0.85)]
+    client.query_points_groups.side_effect = lambda limit, **_: film_groups(hits, limit)
     store = VectorStore(Settings(_env_file=None), client)
     assert await store.search("text", [[1.0] * 768]) == [20, 10]
+    assert client.query_points_groups.call_args.kwargs["group_by"] == "movie_id"
+
+
+async def test_text_search_keeps_ten_films_when_one_film_has_many_plot_chunks():
+    # Real Qdrant: plain nearest points would all be chunks of film 120.
+    client = AsyncQdrantClient(location=":memory:")
+    await client.create_collection(
+        "text", vectors_config=models.VectorParams(size=2, distance=models.Distance.COSINE)
+    )
+    points = [
+        models.PointStruct(
+            id=storage.point_id("text", 120, source="plot", chunk=chunk),
+            vector=[1.0, 0.01 * chunk],
+            payload=storage.point_payload("text", 120, source="plot", chunk=chunk),
+        )
+        for chunk in range(30)
+    ]
+    points += [
+        models.PointStruct(
+            id=storage.point_id("text", movie),
+            vector=[1.0, 0.5 + movie / 10],
+            payload={**storage.point_payload("text", movie)},
+        )
+        for movie in range(1, 12)
+    ]
+    await client.upsert("text", points)
+    store = VectorStore(Settings(_env_file=None), client)
+    films = await store.search("text", [[1.0, 0.0]])
+    assert films[0] == 120 and len(films) == 10
+    await client.close()
 
 
 def speech_hit(movie, offset, score, text):
@@ -437,7 +479,11 @@ def text_store(text_hits, speech_hits, **settings):
         points = speech_hits if collection_name == "speech" else text_hits
         return QueryResponse(points=list(points)[:limit])
 
+    async def query_points_groups(collection_name, limit, **_):
+        return film_groups(text_hits, limit)
+
     client.query_points.side_effect = query_points
+    client.query_points_groups.side_effect = query_points_groups
     return VectorStore(Settings(_env_file=None, **settings), client), client
 
 
@@ -446,8 +492,9 @@ async def test_text_search_raises_quoted_film_to_the_top():
     lines = [speech_hit(603, 460, 0.86, "Следуй за белым кроликом. Кто там?")]
     store, client = text_store(descriptions, lines)
     assert await store.search_text([1.0], "Иди за белым кроликом") == [603, 550, 680]
+    assert client.query_points_groups.call_args.kwargs["collection_name"] == "text"
     collections = [call.kwargs["collection_name"] for call in client.query_points.call_args_list]
-    assert collections == ["text", "speech"]
+    assert collections == ["speech"]
 
 
 @pytest.mark.parametrize(
@@ -513,3 +560,20 @@ def test_query_language():
     assert storage.foreign_query("Follow the white rabbit")
     assert not storage.foreign_query("Иди за белым кроликом")
     assert not storage.foreign_query("фильм с Keanu Reeves про симуляцию")
+
+
+def test_plot_points_have_chunk_numbers():
+    payload = storage.point_payload("text", 120, source="plot", chunk=3)
+    assert payload == {"movie_id": 120, "type": "text", "source": "plot", "chunk": 3}
+    assert storage.point_id("text", 120, source="plot", chunk=3) == str(
+        uuid5(NAMESPACE_URL, "dejaview:text:120:plot:3")
+    )
+    for bad in (
+        {"source": "plot"},
+        {"source": "plot", "chunk": -1},
+        {"source": "overview", "chunk": 0},
+    ):
+        with pytest.raises(ValueError):
+            storage.point_payload("text", 120, **bad)
+    with pytest.raises(ValueError):
+        storage.point_payload("image", 120, 0, chunk=0)
