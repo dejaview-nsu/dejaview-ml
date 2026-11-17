@@ -103,3 +103,28 @@ def test_wikipedia_errors_stop_the_run(tmp_path, monkeypatch):
     with pytest.raises(wiki.WikiError, match="HTTP 503"):
         Wikipedia(tmp_path, Down({})).plots([120])
     assert not (tmp_path / "120.json").exists()
+
+
+@pytest.mark.parametrize("cached", [False, True])
+@pytest.mark.parametrize(
+    "payload", [{"error": {"code": "maxlag", "info": "Lagged"}}, {"errors": [{"code": "internal_api_error"}]}]
+)
+def test_http_200_api_error_does_not_cache_missing_plot(tmp_path, monkeypatch, cached, payload):
+    monkeypatch.setattr(wiki.time, "sleep", lambda _: None)
+    path = tmp_path / "120.json"
+    previous = json.dumps({"language": "ru", "title": "Братство Кольца", "text": WORDS})
+    if cached:
+        path.write_text(previous)
+
+    class ApiError(FakeSession):
+        def get(self, url, params, timeout):
+            if "wikidata" in url:
+                return super().get(url, params, timeout)
+            return FakeResponse(payload)
+
+    with pytest.raises(wiki.WikiError, match="Ошибка API Википедии"):
+        Wikipedia(tmp_path, ApiError({}), refresh=True).plots([120])
+    if cached:
+        assert path.read_text() == previous
+    else:
+        assert not path.exists()

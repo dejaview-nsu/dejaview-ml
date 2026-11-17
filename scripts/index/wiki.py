@@ -174,7 +174,10 @@ class Wikipedia:
                 problem = str(error)
             else:
                 if response.status_code == HTTPStatus.OK:
-                    return response.json()
+                    data = response.json()
+                    if "error" in data or "errors" in data:
+                        raise WikiError(f"Ошибка API Википедии ({url}): {data.get('error', data.get('errors'))}")
+                    return data
                 problem = f"HTTP {response.status_code}"
                 if response.status_code not in RETRY_STATUSES:
                     break
