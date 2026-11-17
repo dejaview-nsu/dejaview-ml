@@ -7,6 +7,8 @@ from importlib.resources import files
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from dejaview_ml.capacity import DECODING, Capacity
 from dejaview_ml.config import Settings
@@ -17,6 +19,37 @@ from dejaview_ml.query import strip_framing
 from dejaview_ml.storage import SchemaMismatch, VectorStore
 
 logger = logging.getLogger(__name__)
+
+
+class RequestLogging:
+    """One log line per request. A plain ASGI middleware, not @app.middleware("http"): that one
+    hides a client disconnect from the handler, and a request whose client is gone must leave
+    the inference queue."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started, status = time.monotonic(), None
+
+        async def send_and_note_status(message: Message) -> None:
+            nonlocal status
+            if message["type"] == "http.response.start":
+                status = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, send_and_note_status)
+        logger.info(
+            "request_id=%r method=%s path=%s status=%s duration_ms=%.1f",
+            Headers(scope=scope).get("x-request-id"),
+            scope["method"],
+            scope["path"],
+            status,
+            (time.monotonic() - started) * 1000,
+        )
 
 
 async def read_body(
@@ -104,19 +137,7 @@ def create_app(
     app = FastAPI(title="DejaView ML", version="0.1.0", lifespan=lifespan)
     app.openapi = lambda: yaml.safe_load(files("dejaview_ml").joinpath("openapi.yaml").read_text())
 
-    @app.middleware("http")
-    async def request_logging(request: Request, call_next):
-        started = time.monotonic()
-        response = await call_next(request)
-        logger.info(
-            "request_id=%r method=%s path=%s status=%s duration_ms=%.1f",
-            request.headers.get("x-request-id"),
-            request.method,
-            request.url.path,
-            response.status_code,
-            (time.monotonic() - started) * 1000,
-        )
-        return response
+    app.add_middleware(RequestLogging)
 
     @app.exception_handler(MlError)
     async def ml_error(request: Request, exc: MlError):
@@ -160,6 +181,7 @@ def create_app(
         )
 
     async def search(request: Request, modality: str):
+        arrived = time.monotonic()
         state = app.state.encoders.states[modality]
         if state != "ready":
             raise MlError(503, "NOT_READY", f"model {modality} is {state}")
@@ -175,7 +197,7 @@ def create_app(
         query = parse_text_query(data) if modality == "text" else None
         # Only model runs and decoding wait in the queues; Qdrant is queried after them.
         encoders, capacity = app.state.encoders, app.state.capacity
-        budget = capacity.budget()
+        budget = capacity.budget(arrived, request.is_disconnected)
         if modality == "text":
             query = strip_framing(query)
             vectors = await capacity.run("text", budget, encoders.encode_text, query)

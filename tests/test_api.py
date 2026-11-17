@@ -1,6 +1,7 @@
 import asyncio
 import io
 import struct
+import warnings
 import zlib
 from contextlib import ExitStack
 from pathlib import Path
@@ -12,6 +13,7 @@ import yaml
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from dejaview_ml import media
 from dejaview_ml.app import create_app
 from dejaview_ml.config import Settings
 from dejaview_ml.embeddings import Encoders
@@ -109,6 +111,21 @@ def test_invalid_images(api, content, media_type, status, code):
     assert response.status_code == status
     assert response.json()["code"] == code
     store.search.assert_not_called()
+
+
+def test_too_large_image_is_refused_whatever_the_warning_filters(monkeypatch):
+    # Parallel decoding must not depend on process-wide warning filters: another thread may
+    # change them at any moment, here they ignore everything.
+    monkeypatch.setattr(media, "MAX_IMAGE_PIXELS", 64 * 32 - 1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        filters = list(warnings.filters)
+        with pytest.raises(MlError) as error:
+            media.decode_image(png(), "image/png")
+        assert warnings.filters == filters
+    assert (error.value.status, error.value.code) == (422, "FILE_CORRUPTED")
+    monkeypatch.setattr(media, "MAX_IMAGE_PIXELS", 64 * 32)
+    assert media.decode_image(png(), "image/png").size == (64, 32)
 
 
 def test_size_limit_checks_header_and_actual_stream(api, monkeypatch):
