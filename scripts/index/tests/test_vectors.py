@@ -283,3 +283,44 @@ def test_delete_requires_completion_and_waits(client, monkeypatch):
     monkeypatch.setattr(client, "delete", acknowledge)
     with pytest.raises(IndexingError, match="не подтвердил завершение"):
         VectorWriter(client, "memory").delete_movie(603)
+
+
+def plot_fragments(count: int, value: float = 1.0) -> list[Fragment]:
+    return [Fragment(None, [value] + [0.0] * (DIMENSIONS["text"] - 1), "plot", chunk) for chunk in range(count)]
+
+
+def sources(client: QdrantClient, movie_id: int) -> list[tuple[str, int | None]]:
+    return sorted((p.payload["source"], p.payload.get("chunk")) for p in movie_points(client, "text", movie_id))
+
+
+def test_plot_points_are_numbered_chunks_next_to_the_card(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(120, fragments(1))
+    assert writer.replace_plot(120, plot_fragments(3)) == 3
+    assert sources(client, 120) == [("metadata", None), ("overview", None), ("plot", 0), ("plot", 1), ("plot", 2)]
+    ids = {point.id for point in movie_points(client, "text", 120) if point.payload["source"] == "plot"}
+    assert str(uuid5(NAMESPACE_URL, "dejaview:text:120:plot:2")) in ids
+
+
+def test_shorter_plot_removes_stale_chunks_and_empty_plot_removes_all(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(120, fragments(1))
+    writer.replace_plot(120, plot_fragments(5))
+    writer.replace_plot(120, plot_fragments(2, value=0.5))
+    assert sources(client, 120) == [("metadata", None), ("overview", None), ("plot", 0), ("plot", 1)]
+    writer.replace_plot(120, [])
+    assert sources(client, 120) == [("metadata", None), ("overview", None)]
+
+
+def test_plot_survives_reindexing_the_movie_and_its_card(client):
+    writer = VectorWriter(client, "memory")
+    writer.replace_movie(120, fragments(1))
+    writer.replace_plot(120, plot_fragments(2))
+    writer.replace_movie(120, fragments(2, value=0.5))
+    writer.update_text(120, [Fragment(None, [0.3] + [0.0] * (DIMENSIONS["text"] - 1), "overview")])
+    assert sources(client, 120) == [("overview", None), ("plot", 0), ("plot", 1)]
+
+
+def test_replace_plot_takes_plot_fragments_only(client):
+    with pytest.raises(ValueError):
+        VectorWriter(client, "memory").replace_plot(120, fragments(1)["text"])

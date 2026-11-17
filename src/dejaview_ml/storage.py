@@ -9,7 +9,10 @@ from dejaview_ml.config import COLLECTIONS, DIMENSIONS, SPEECH_COLLECTION, Setti
 from dejaview_ml.embeddings import AudioQuery
 from dejaview_ml.errors import MlError
 
-TEXT_SOURCES = ("overview", "metadata")
+# Text points of a film: one per card field (overview, metadata), and the plot from Wikipedia
+# split into numbered chunks (plot), see scripts/index/wiki.py.
+CARD_TEXT_SOURCES = ("overview", "metadata")
+TEXT_SOURCES = (*CARD_TEXT_SOURCES, "plot")
 METADATA_ACTORS = 10
 
 
@@ -18,7 +21,11 @@ class SchemaMismatch(RuntimeError):
 
 
 def point_payload(
-    modality: str, movie_id: int, offset_sec: int | None = None, source: str | None = None
+    modality: str,
+    movie_id: int,
+    offset_sec: int | None = None,
+    source: str | None = None,
+    chunk: int | None = None,
 ) -> dict:
     if modality not in COLLECTIONS or type(movie_id) is not int:
         raise ValueError("invalid modality or movie_id")
@@ -32,21 +39,33 @@ def point_payload(
         if source not in TEXT_SOURCES:
             raise ValueError(f"text source must be one of {TEXT_SOURCES}")
         result["source"] = source
+        if source == "plot":
+            if type(chunk) is not int or chunk < 0:
+                raise ValueError("plot chunk must be a nonnegative integer")
+            result["chunk"] = chunk
+        elif chunk is not None:
+            raise ValueError("only plot has chunk")
     else:
         if type(offset_sec) is not int or offset_sec < 0:
             raise ValueError("offset_sec must be a nonnegative integer")
-        if source is not None:
-            raise ValueError("only text has source")
+        if source is not None or chunk is not None:
+            raise ValueError("only text has source and chunk")
         result["offset_sec"] = offset_sec
     return result
 
 
 def point_id(
-    modality: str, movie_id: int, offset_sec: int | None = None, source: str | None = None
+    modality: str,
+    movie_id: int,
+    offset_sec: int | None = None,
+    source: str | None = None,
+    chunk: int | None = None,
 ) -> str:
-    payload = point_payload(modality, movie_id, offset_sec, source)
+    payload = point_payload(modality, movie_id, offset_sec, source, chunk)
     if modality != "text":
         suffix = f":{offset_sec}"
+    elif payload["source"] == "plot":
+        suffix = f":plot:{chunk}"
     else:
         suffix = ":metadata" if payload["source"] == "metadata" else ""
     return str(uuid5(NAMESPACE_URL, f"dejaview:{modality}:{movie_id}{suffix}"))
@@ -323,6 +342,10 @@ class VectorStore:
             ]
             return temporal_aggregate(windows, TEMPORAL_TOLERANCE_SEC[modality])
 
+        if modality == "text":
+            films = [await self._query_films(modality, v, self.settings.top_k) for v in vectors]
+            return aggregate([point for points in films for point in points], TEXT_LIMIT, "max")
+
         # Global top-K across query segments; duplicate point hits count only once.
         points: dict[str, models.ScoredPoint] = {}
         for vector in vectors:
@@ -331,14 +354,12 @@ class VectorStore:
                 if key not in points or point.score > points[key].score:
                     points[key] = point
         nearest = sorted(points.values(), key=lambda point: (-point.score, str(point.id)))
-        if modality == "text":
-            return aggregate(nearest[: self.settings.top_k], limit=10, combine="max")
         return aggregate(nearest[: self.settings.top_k], limit=1)
 
     async def search_text(self, vector: list[float], query: str) -> list[int]:
         """Films by description and metadata, with quoted dialogue raised to the top."""
         text: dict[int, float] = {}
-        for point in await self._query("text", vector, self.settings.top_k):
+        for point in await self._query_films("text", vector, self.settings.top_k):
             movie_id = (point.payload or {}).get("movie_id")
             if type(movie_id) is not int:
                 raise RuntimeError("Qdrant point has invalid movie_id")
@@ -385,6 +406,26 @@ class VectorStore:
         except Exception as exc:
             raise MlError(503, "QDRANT_UNAVAILABLE", "Qdrant search failed") from exc
         return result.points
+
+    async def _query_films(
+        self, modality: str, vector: list[float], limit: int
+    ) -> list[models.ScoredPoint]:
+        """The best point of each of the `limit` nearest films. A film has many text points (plot
+        chunks): plain nearest points could all be one film's and leave fewer films than asked."""
+        try:
+            result = await self.client.query_points_groups(
+                collection_name=modality,
+                query=vector,
+                group_by="movie_id",
+                limit=limit,
+                group_size=1,
+                score_threshold=self.settings.threshold(modality),
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            raise MlError(503, "QDRANT_UNAVAILABLE", "Qdrant search failed") from exc
+        return [group.hits[0] for group in result.groups if group.hits]
 
     async def close(self) -> None:
         await self.client.close()

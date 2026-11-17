@@ -5,7 +5,7 @@ from typing import TypeVar
 from qdrant_client import QdrantClient, models
 
 from dejaview_ml.config import COLLECTIONS, DIMENSIONS, SPEECH_COLLECTION
-from dejaview_ml.storage import TEXT_SOURCES, point_id, point_payload
+from dejaview_ml.storage import CARD_TEXT_SOURCES, point_id, point_payload
 from scripts.index.embedding import Fragment
 from scripts.index.errors import IndexingError
 
@@ -48,9 +48,15 @@ class VectorWriter:
 
     def replace_movie(self, movie_id: int, fragments: dict[str, list[Fragment]]) -> dict[str, int]:
         # Заменяются только переданные коллекции: индексация одного текста не трогает кадры, видео и звук.
-        for name in fragments:
+        # В text заменяются только точки карточки: сюжет пишет scripts.index.plot, и он остаётся.
+        counts = {}
+        for name, movie_fragments in fragments.items():
+            if name == "text":
+                counts[name] = self.update_text(movie_id, movie_fragments)
+                continue
             self._call(f"удаление старых точек из {name}", lambda name=name: self._delete_movie(name, movie_id))
-        return {name: self._write(name, movie_id, movie_fragments) for name, movie_fragments in fragments.items()}
+            counts[name] = self._write(name, movie_id, movie_fragments)
+        return counts
 
     def delete_movie(self, movie_id: int) -> None:
         """Удалить все точки фильма, включая модальности, выключенные в ML-сервисе."""
@@ -73,8 +79,8 @@ class VectorWriter:
         по ID, затем удаление по ID точек, которых больше нет. Если запись упадёт, у фильма останутся прежние
         или уже новые точки, а не пустота."""
         count = self._write("text", movie_id, fragments)
-        present = {fragment.source for fragment in fragments}
-        stale = [point_id("text", movie_id, source=source) for source in TEXT_SOURCES if source not in present]
+        present = {fragment.source or "overview" for fragment in fragments}
+        stale = [point_id("text", movie_id, source=source) for source in CARD_TEXT_SOURCES if source not in present]
         if stale:
             selector = models.PointIdsList(points=stale)
             self._call("удаление устаревших точек text", lambda: self._client.delete("text", selector, wait=True))
@@ -83,9 +89,9 @@ class VectorWriter:
     def _write(self, name: str, movie_id: int, fragments: list[Fragment]) -> int:
         points = [
             models.PointStruct(
-                id=point_id(name, movie_id, fragment.offset_sec, fragment.source),
+                id=point_id(name, movie_id, fragment.offset_sec, fragment.source, fragment.chunk),
                 vector=fragment.vector,
-                payload=point_payload(name, movie_id, fragment.offset_sec, fragment.source),
+                payload=point_payload(name, movie_id, fragment.offset_sec, fragment.source, fragment.chunk),
             )
             for fragment in fragments
         ]
@@ -94,6 +100,25 @@ class VectorWriter:
             self._call(f"запись в {name}", lambda name=name, batch=batch: self._client.upsert(name, batch, wait=True))
         logger.info("%s: записано %d точек", name, len(points))
         return len(points)
+
+    def replace_plot(self, movie_id: int, fragments: list[Fragment]) -> int:
+        """Точки сюжета фильма: сначала запись по стабильным ID, затем удаление его прежних кусков,
+        которых больше нет. Пустой список удаляет сюжет фильма. Описание и метаданные не трогаются."""
+        if any(fragment.source != "plot" for fragment in fragments):
+            raise ValueError("replace_plot writes plot fragments only")
+        count = self._write("text", movie_id, fragments) if fragments else 0
+        ids = [point_id("text", movie_id, source="plot", chunk=fragment.chunk) for fragment in fragments]
+        stale = models.FilterSelector(
+            filter=models.Filter(
+                must=[
+                    models.FieldCondition(key="movie_id", match=models.MatchValue(value=movie_id)),
+                    models.FieldCondition(key="source", match=models.MatchValue(value="plot")),
+                ],
+                must_not=[models.HasIdCondition(has_id=ids)] if ids else [],
+            )
+        )
+        self._call("удаление устаревших кусков сюжета", lambda: self._client.delete("text", stale, wait=True))
+        return count
 
     def replace_speech(self, movie_id: int, windows: list[tuple[int, str, list[float]]]) -> int:
         """windows: (offset_sec, text, vector). Points are written by stable IDs first; only then the
