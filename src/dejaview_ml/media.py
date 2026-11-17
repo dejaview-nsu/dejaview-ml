@@ -48,7 +48,7 @@ def decode_image(data: bytes, content_type: str) -> Image.Image:
         with Image.open(io.BytesIO(data)) as source:
             if source.format != MEDIA_TYPES["image"][content_type]:
                 raise MlError(415, "UNSUPPORTED_MEDIA_TYPE", "image does not match Content-Type")
-           
+
             if source.width * source.height > MAX_IMAGE_PIXELS:
                 raise MlError(422, "FILE_CORRUPTED", "image is too large")
             source.load()

@@ -191,6 +191,7 @@ async def test_text_search_is_served_while_audio_transcribes():
     store = AsyncMock()
     store.healthy.return_value = True
     store.search.return_value = [603]
+    store.search_text.return_value = [603]
     store.search_audio.return_value = [603]
     app = create_app(Settings(_env_file=None), SlowSpeech(), store)
     async with app.router.lifespan_context(app):
@@ -228,6 +229,7 @@ async def test_request_of_a_disconnected_client_leaves_the_queue_through_the_app
     store = AsyncMock()
     store.healthy.return_value = True
     store.search.return_value = [603]
+    store.search_text.return_value = [603]
     app = create_app(Settings(_env_file=None), SlowImage(), store)
     body = png()
     messages = [{"type": "http.request", "body": body, "more_body": False}]
