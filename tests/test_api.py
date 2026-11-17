@@ -1,6 +1,7 @@
 import asyncio
 import io
 import struct
+import warnings
 import zlib
 from contextlib import ExitStack
 from pathlib import Path
@@ -12,6 +13,7 @@ import yaml
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from dejaview_ml import media
 from dejaview_ml.app import create_app
 from dejaview_ml.config import Settings
 from dejaview_ml.embeddings import Encoders
@@ -111,6 +113,21 @@ def test_invalid_images(api, content, media_type, status, code):
     store.search.assert_not_called()
 
 
+def test_too_large_image_is_refused_whatever_the_warning_filters(monkeypatch):
+    # Parallel decoding must not depend on process-wide warning filters: another thread may
+    # change them at any moment, here they ignore everything.
+    monkeypatch.setattr(media, "MAX_IMAGE_PIXELS", 64 * 32 - 1)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        filters = list(warnings.filters)
+        with pytest.raises(MlError) as error:
+            media.decode_image(png(), "image/png")
+        assert warnings.filters == filters
+    assert (error.value.status, error.value.code) == (422, "FILE_CORRUPTED")
+    monkeypatch.setattr(media, "MAX_IMAGE_PIXELS", 64 * 32)
+    assert media.decode_image(png(), "image/png").size == (64, 32)
+
+
 def test_size_limit_checks_header_and_actual_stream(api, monkeypatch):
     client, _, store = api
     monkeypatch.setitem(LIMITS, "image", 10)
@@ -195,14 +212,15 @@ def test_openapi_matches_supplied_contract(api):
     )
 
 
-async def test_overload_does_not_queue_and_health_remains_available():
+async def test_slow_qdrant_does_not_occupy_inference_and_health_remains_available():
     store = AsyncMock()
     store.healthy.return_value = True
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def slow_search(*args):
-        entered.set()
-        await release.wait()
+        if not entered.is_set():
+            entered.set()
+            await release.wait()
         return [603]
 
     store.search.side_effect = slow_search
@@ -217,10 +235,11 @@ async def test_overload_does_not_queue_and_health_remains_available():
             await asyncio.wait_for(entered.wait(), timeout=5)
             try:
                 assert (await c.get("/health")).status_code == 200
+                # The first request waits for Qdrant: the image model is free for the next one.
                 second = await c.post(
                     "/v1/search/image", content=png(), headers={"Content-Type": "image/png"}
                 )
-                assert second.status_code == 503
+                assert second.status_code == 200
             finally:
                 release.set()
             assert (await first).status_code == 200

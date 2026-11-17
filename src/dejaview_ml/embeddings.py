@@ -306,14 +306,7 @@ class Encoders:
         self, modality: str, data: bytes, content_type: str
     ) -> tuple[list[list[float]], list[float]]:
         """Vectors of a search query plus the start of each one inside the query, in seconds."""
-        if modality != "audio":
-            vectors = self.encode(modality, data, content_type)
-            step = VIDEO_QUERY_SEGMENT_SEC if modality == "video" else 0.0
-            return vectors, [index * step for index in range(len(vectors))]
-        if self.states.get(modality) != "ready":
-            raise MlError(503, "NOT_READY", f"model {modality} is {self.states.get(modality)}")
-        waveform = decode_audio(data, content_type, self.settings.ffmpeg_timeout_seconds)
-        return self._encode_audio_windows(waveform)
+        return self.embed_query(modality, self.decode_query(modality, data, content_type))
 
     def encode_audio_query(self, data: bytes, content_type: str) -> AudioQuery:
         """CLAP windows as in encode_query, plus Whisper transcript encoded by the text model.
@@ -321,16 +314,47 @@ class Encoders:
         Speech is skipped (empty transcript) while the speech model is not ready, so audio
         search keeps working on CLAP alone.
         """
-        if self.states.get("audio") != "ready":
-            raise MlError(503, "NOT_READY", f"model audio is {self.states.get('audio')}")
-        waveform = decode_audio(data, content_type, self.settings.ffmpeg_timeout_seconds)
-        vectors, offsets = self._encode_audio_windows(waveform)
-        transcript, speech_vector = "", None
-        if self.states.get("speech") == "ready" and self.states.get("text") == "ready":
-            transcript = self._transcribe(waveform)
-            if transcript:
-                speech_vector = self._encode_text(transcript[:SPEECH_QUERY_CHARS], passage=False)
+        waveform = self.decode_query("audio", data, content_type)
+        vectors, offsets = self.embed_query("audio", waveform)
+        transcript = self.transcribe_query(waveform) if self.speech_ready() else ""
+        speech_vector = self.encode_transcript(transcript) if transcript else None
         return AudioQuery(vectors, offsets, transcript, speech_vector)
+
+    # A query in steps, each using at most one model, so the service can run different models
+    # at once: decode_query (ffmpeg / Pillow, no model), embed_query, and for audio also
+    # transcribe_query (Whisper) and encode_transcript (text model).
+
+    def decode_query(self, modality: str, data: bytes, content_type: str) -> Any:
+        """An image, video segments (lists of frames) or a 48 kHz mono waveform."""
+        if self.states.get(modality) != "ready":
+            raise MlError(503, "NOT_READY", f"model {modality} is {self.states.get(modality)}")
+        timeout = self.settings.ffmpeg_timeout_seconds
+        if modality == "image":
+            return decode_image(data, content_type)
+        if modality == "video":
+            return decode_video(data, content_type, timeout)
+        if modality == "audio":
+            return decode_audio(data, content_type, timeout)
+        raise ValueError("use encode_text for text input")
+
+    def embed_query(self, modality: str, decoded: Any) -> tuple[list[list[float]], list[float]]:
+        if modality == "image":
+            return [self._encode_frames(modality, [decoded])], [0.0]
+        if modality == "video":
+            vectors = [self._encode_frames(modality, frames) for frames in decoded]
+            return vectors, [index * VIDEO_QUERY_SEGMENT_SEC for index in range(len(vectors))]
+        if modality == "audio":
+            return self._encode_audio_windows(decoded)
+        raise ValueError(f"unknown modality {modality}")
+
+    def speech_ready(self) -> bool:
+        return self.states.get("speech") == "ready" and self.states.get("text") == "ready"
+
+    def transcribe_query(self, waveform: np.ndarray) -> str:
+        return self._transcribe(waveform)
+
+    def encode_transcript(self, transcript: str) -> list[float]:
+        return self._encode_text(transcript[:SPEECH_QUERY_CHARS], passage=False)
 
     def _encode_audio_windows(self, waveform: np.ndarray) -> tuple[list[list[float]], list[float]]:
         windows = [(0.0, waveform)]

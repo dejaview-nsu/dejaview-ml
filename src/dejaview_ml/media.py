@@ -3,7 +3,6 @@ import json
 import math
 import subprocess
 import tempfile
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +11,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from dejaview_ml.errors import MlError
 
 MIB = 1024 * 1024
+MAX_IMAGE_PIXELS = Image.MAX_IMAGE_PIXELS or 89_478_485
 LIMITS = {"image": 10 * MIB, "video": 50 * MIB, "audio": 20 * MIB, "text": 64 * 1024}
 MEDIA_TYPES = {
     "text": {"application/json": ".json"},
@@ -45,22 +45,20 @@ def parse_text_query(data: bytes) -> str:
 
 def decode_image(data: bytes, content_type: str) -> Image.Image:
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(data)) as source:
-                if source.format != MEDIA_TYPES["image"][content_type]:
-                    raise MlError(
-                        415, "UNSUPPORTED_MEDIA_TYPE", "image does not match Content-Type"
-                    )
-                source.load()
-                return ImageOps.exif_transpose(source).convert("RGB")
+        with Image.open(io.BytesIO(data)) as source:
+            if source.format != MEDIA_TYPES["image"][content_type]:
+                raise MlError(415, "UNSUPPORTED_MEDIA_TYPE", "image does not match Content-Type")
+
+            if source.width * source.height > MAX_IMAGE_PIXELS:
+                raise MlError(422, "FILE_CORRUPTED", "image is too large")
+            source.load()
+            return ImageOps.exif_transpose(source).convert("RGB")
     except (
         UnidentifiedImageError,
         OSError,
         ValueError,
         SyntaxError,
         Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
     ) as exc:
         raise MlError(422, "FILE_CORRUPTED", "cannot decode image") from exc
 
