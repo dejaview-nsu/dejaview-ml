@@ -10,6 +10,7 @@ from PIL import Image
 from dejaview_ml.config import DIMENSIONS, MODEL_IDS, SPEECH_MODEL_ID, Settings
 from dejaview_ml.errors import MlError
 from dejaview_ml.media import decode_audio, decode_image, decode_video, validate_text
+from dejaview_ml.video_sampling import VIDEO_SEGMENT_SEC
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ AUDIO_RATE = 48_000
 # matches can be checked for consistency in time. Fewer than two windows give nothing to check.
 AUDIO_QUERY_WINDOW_SEC = 5.0
 AUDIO_QUERY_STEP_SEC = 2.5
-VIDEO_QUERY_SEGMENT_SEC = 10.0
+VIDEO_QUERY_SEGMENT_SEC = float(VIDEO_SEGMENT_SEC)
 SPEECH_RATE = 16_000
 SPEECH_MAX_TOKENS = 128
 SPEECH_MIN_WORDS = 3
@@ -229,7 +230,7 @@ class Encoders:
             result.append(segments)
         return result
 
-    def _encode_frames(self, modality: str, frames: list[Image.Image]) -> list[float]:
+    def _frame_embeddings(self, modality: str, frames: list[Image.Image]) -> Any:
         import torch
         import torch.nn.functional as functional
 
@@ -237,9 +238,19 @@ class Encoders:
         inputs = self.processors[modality](images=frames, return_tensors="pt", **options)
         with torch.inference_mode():
             features = self.models[modality](pixel_values=inputs.pixel_values.to(self.device))
-            frames_normalized = functional.normalize(features.image_embeds.float(), dim=-1)
-            vector = functional.normalize(frames_normalized.mean(dim=0), dim=0).cpu().numpy()
+            return functional.normalize(features.image_embeds.float(), dim=-1)
+
+    def _encode_frames(self, modality: str, frames: list[Image.Image]) -> list[float]:
+        import torch.nn.functional as functional
+
+        features = self._frame_embeddings(modality, frames)
+        vector = functional.normalize(features.mean(dim=0), dim=0).cpu().numpy()
         return self._validate_vector(modality, vector)
+
+    def encode_video_frames(self, frames: list[Image.Image]) -> list[list[float]]:
+        """One normalized vector per sampled second; a single model call for the batch."""
+        features = self._frame_embeddings("video", frames).cpu().numpy()
+        return [self._validate_vector("video", vector) for vector in features]
 
     @staticmethod
     def _validate_vector(modality: str, vector: np.ndarray) -> list[float]:
@@ -300,7 +311,7 @@ class Encoders:
         if modality != "video":
             raise ValueError("use encode_text for text input")
         segments = decode_video(data, content_type, self.settings.ffmpeg_timeout_seconds)
-        return [self._encode_frames(modality, frames) for frames in segments]
+        return self.encode_video_frames([frame for segment in segments for frame in segment])
 
     def encode_query(
         self, modality: str, data: bytes, content_type: str
@@ -341,7 +352,7 @@ class Encoders:
         if modality == "image":
             return [self._encode_frames(modality, [decoded])], [0.0]
         if modality == "video":
-            vectors = [self._encode_frames(modality, frames) for frames in decoded]
+            vectors = self.encode_video_frames([frame for segment in decoded for frame in segment])
             return vectors, [index * VIDEO_QUERY_SEGMENT_SEC for index in range(len(vectors))]
         if modality == "audio":
             return self._encode_audio_windows(decoded)

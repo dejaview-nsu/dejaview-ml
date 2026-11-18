@@ -8,13 +8,13 @@ DIMENSIONS = {"text": 768, "image": 512, "video": 512, "audio": 512}
 MODEL_IDS = {
     "text": "intfloat/multilingual-e5-base",
     "image": "openai/clip-vit-base-patch32",
-    "video": "Searchium-ai/clip4clip-webvid150k",
+    "video": "openai/clip-vit-base-patch32",
     "audio": "laion/clap-htsat-fused",
 }
 REVISIONS = {
     "text": "d128750597153bb5987e10b1c3493a34e5a4502a",
     "image": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
-    "video": "d2f89850fec28ac1e5cd27db2f0b76d7491e61ce",
+    "video": "3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268",
     "audio": "365dea6ef167def6676140ed93bbc43f84dabb28",
 }
 # Speech: Whisper turns an audio query into text, which is searched among indexed lines of

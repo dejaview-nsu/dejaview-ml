@@ -8,6 +8,7 @@ from qdrant_client import AsyncQdrantClient, models
 from dejaview_ml.config import COLLECTIONS, DIMENSIONS, SPEECH_COLLECTION, Settings
 from dejaview_ml.embeddings import AudioQuery
 from dejaview_ml.errors import MlError
+from dejaview_ml.video_sampling import VIDEO_SEGMENT_SEC
 
 # Text points of a film: one per card field (overview, metadata), and the plot from Wikipedia
 # split into numbered chunks (plot), see scripts/index/wiki.py.
@@ -115,7 +116,7 @@ def aggregate(
 
 # Matches of consecutive query windows must land at consecutive moments of the same film.
 # Tolerance covers the index grid: a query window rarely starts exactly on an indexed offset.
-TEMPORAL_TOLERANCE_SEC = {"video": 10.0, "audio": 10.0}
+TEMPORAL_TOLERANCE_SEC = {"video": float(VIDEO_SEGMENT_SEC), "audio": 10.0}
 TEMPORAL_CANDIDATES = 100
 
 # Audio search scores every film twice: by CLAP (how well the query windows line up in time with

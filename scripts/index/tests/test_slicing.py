@@ -52,8 +52,8 @@ def test_audio_window_contents():
 
 
 def test_expected_counts():
-    assert expected_counts(12) == {"image": 3, "video": 2, "audio": 3}
-    assert expected_counts(6000) == {"image": 1200, "video": 600, "audio": 1200}
+    assert expected_counts(12) == {"image": 3, "video": 12, "audio": 3}
+    assert expected_counts(6000) == {"image": 1200, "video": 6000, "audio": 1200}
 
 
 @requires_ffmpeg
@@ -66,7 +66,7 @@ def test_offsets_of_real_movie(tmp_path):
     assert batches[0].images[0].size == (854, 480)
 
     segments = list(video_segments_stream(source, info, tmp_path))
-    assert [(offset, len(frames)) for offset, frames in segments] == [(0, 10), (10, 2)]
+    assert [(offset, len(frames)) for offset, frames in segments] == [(i, 1) for i in range(12)]
 
     windows = list(audio_chunks(source, info, tmp_path))
     assert [offset for offset, _ in windows] == [0, 5, 10]
@@ -120,7 +120,7 @@ def test_relative_source_path(tmp_path, monkeypatch):
     source = Path("movie.mp4")
     info = probe_video(source)
     assert [offset for batch in image_batches(source, info, temp_dir) for offset in batch.offsets_sec] == [0, 5]
-    assert [offset for offset, _ in video_segments_stream(source, info, temp_dir)] == [0]
+    assert [offset for offset, _ in video_segments_stream(source, info, temp_dir)] == list(range(6))
     assert [offset for offset, _ in audio_chunks(source, info, temp_dir)] == [0, 5]
 
 

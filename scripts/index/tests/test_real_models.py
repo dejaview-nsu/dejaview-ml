@@ -8,7 +8,7 @@ from dejaview_ml.config import Settings
 from dejaview_ml.embeddings import Encoders
 from dejaview_ml.storage import metadata_passage
 from scripts.catalog.tests.samples import sample_movie
-from scripts.index.embedding import embed_movie
+from scripts.index.embedding import embed_movie, embed_video
 from scripts.index.tests.videos import make_video, requires_ffmpeg
 from scripts.index.validation import probe_video
 
@@ -39,6 +39,17 @@ def cut(source, start, duration, name, *options):
     return path.read_bytes()
 
 
+def test_video_seconds_match_query_vectors(tmp_path):
+    source = make_video(tmp_path / "movie.mp4", duration=4)
+    encoders = Encoders(Settings(_env_file=None, device="cpu", local_files_only=True))
+    fragments = embed_video(encoders, source, probe_video(source), tmp_path)
+    vectors, offsets = encoders.encode_query("video", source.read_bytes(), "video/mp4")
+    assert [fragment.offset_sec for fragment in fragments] == offsets == [0, 1, 2, 3]
+    np.testing.assert_allclose([f.vector for f in fragments], vectors, atol=1e-6)
+    assert np.asarray(vectors).shape == (4, 512)
+    np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-5)
+
+
 def test_indexed_fragments_match_queries(tmp_path):
     source = make_video(tmp_path / "movie.mp4", duration=22)
     encoders = Encoders(Settings(_env_file=None, device="cpu"))
@@ -46,7 +57,7 @@ def test_indexed_fragments_match_queries(tmp_path):
     fragments = embed_movie(encoders, movie, source, probe_video(source), tmp_path)
 
     assert [fragment.offset_sec for fragment in fragments["image"]] == [0, 5, 10, 15, 20]
-    assert [fragment.offset_sec for fragment in fragments["video"]] == [0, 10, 20]
+    assert [fragment.offset_sec for fragment in fragments["video"]] == list(range(22))
     assert [fragment.offset_sec for fragment in fragments["audio"]] == [0, 5, 10, 15, 20]
 
     def similarity(indexed, query):

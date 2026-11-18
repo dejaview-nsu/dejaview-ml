@@ -24,7 +24,7 @@ REENCODE_HINT = (
 class VideoInfo:
     duration_sec: float
     video_stream: int
-    audio_stream: int
+    audio_stream: int | None
     width: int
     height: int
     sample_aspect_ratio: Fraction
@@ -38,7 +38,7 @@ def require_ffmpeg() -> None:
         )
 
 
-def probe_video(path: Path) -> VideoInfo:
+def probe_video(path: Path, *, require_audio: bool = True) -> VideoInfo:
     if not path.is_file():
         raise ConfigError(f"Видеофайл не найден: {path}")
     metadata = _run_ffprobe(path)
@@ -58,25 +58,26 @@ def probe_video(path: Path) -> VideoInfo:
     else:
         problems.extend(_video_problems(video))
     audio = _first_stream(streams, "audio")
-    if audio is None:
+    if require_audio and audio is None:
         problems.append("нет звуковой дорожки, она нужна для коллекции audio")
-    elif audio.get("codec_name") != "aac":
+    elif require_audio and audio.get("codec_name") != "aac":
         problems.append(f"аудиокодек {audio.get('codec_name', 'неизвестен')}, нужен AAC")
 
     duration = _as_float(format_section.get("duration"))
     if duration is None or duration <= 0:
         problems.append("не удалось определить длительность")
 
-    if problems or video is None or audio is None or duration is None:
+    if problems or video is None or duration is None:
+        audio_spec = ", AAC" if require_audio else ""
         raise UnsuitableFileError(
-            f"Файл {path} не подходит для индексации (#17395 п. 2.3: MP4, H.264, AAC, не больше "
+            f"Файл {path} не подходит для индексации (#17395 п. 2.3: MP4, H.264{audio_spec}, не больше "
             f"{MAX_WIDTH}×{MAX_HEIGHT}):\n" + "".join(f"  - {problem}\n" for problem in problems) + "Пережмите его, "
             f"например:\n  {REENCODE_HINT}"
         )
     return VideoInfo(
         duration_sec=duration,
         video_stream=int(video["index"]),
-        audio_stream=int(audio["index"]),
+        audio_stream=int(audio["index"]) if audio is not None else None,
         width=int(video["width"]),
         height=int(video["height"]),
         sample_aspect_ratio=_sample_aspect_ratio(video.get("sample_aspect_ratio")),

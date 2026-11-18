@@ -12,6 +12,7 @@ from dejaview_ml.config import DIMENSIONS, Settings
 from dejaview_ml.embeddings import Encoders
 from dejaview_ml.media import LIMITS, MEDIA_TYPES
 from dejaview_ml.storage import VectorStore, point_id, point_payload
+from dejaview_ml.video_sampling import VIDEO_SEGMENT_SEC
 
 
 def main():
@@ -54,7 +55,8 @@ def main():
         offsets = [None]
     else:
         vectors = encoders.encode(args.modality, data, content_type)
-        offsets = [(args.offset_sec or 0) + index * 10 for index in range(len(vectors))]
+        step = VIDEO_SEGMENT_SEC if args.modality == "video" else 10
+        offsets = [(args.offset_sec or 0) + index * step for index in range(len(vectors))]
 
     async def upsert():
         store = VectorStore(settings)

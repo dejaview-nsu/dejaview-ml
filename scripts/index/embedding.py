@@ -3,6 +3,7 @@ import time
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 
 from dejaview_ml.config import MODEL_IDS, SPEECH_MODEL_ID
@@ -14,6 +15,7 @@ from scripts.index.slicing import audio_chunks, expected_counts, image_batches, 
 from scripts.index.validation import VideoInfo
 
 PROGRESS_STEP_PERCENT = 10
+VIDEO_BATCH_SIZE = 32
 
 logger = logging.getLogger(__name__)
 
@@ -59,15 +61,7 @@ def embed_movie(
     load_model(encoders, "image")
     fragments["image"] = _collect("image", expected["image"], _encode_images(encoders, source, info, temp_dir))
 
-    # Нарезки закрываются явно: при ошибке модели ffmpeg останавливается до удаления временной папки,
-    # а не когда сборщик мусора доберётся до генератора.
-    load_model(encoders, "video")
-    with closing(video_segments_stream(source, info, temp_dir)) as segments:
-        fragments["video"] = _collect(
-            "video",
-            expected["video"],
-            (Fragment(offset, encoders._encode_frames("video", frames)) for offset, frames in segments),
-        )
+    fragments["video"] = embed_video(encoders, source, info, temp_dir)
 
     load_model(encoders, "audio")
     with closing(audio_chunks(source, info, temp_dir)) as windows:
@@ -77,6 +71,20 @@ def embed_movie(
             (Fragment(offset, encoders._encode_audio(window)) for offset, window in windows),
         )
     return fragments
+
+
+def embed_video(encoders: Encoders, source: Path, info: VideoInfo, temp_dir: Path) -> list[Fragment]:
+    load_model(encoders, "video")
+    # Закрываем ffmpeg до очистки временной папки даже при ошибке модели.
+    with closing(video_segments_stream(source, info, temp_dir)) as segments:
+        return _collect("video", expected_counts(info.duration_sec)["video"], _encode_video(encoders, segments))
+
+
+def _encode_video(encoders: Encoders, segments: Iterator) -> Iterator[Fragment]:
+    while batch := list(islice(segments, VIDEO_BATCH_SIZE)):
+        vectors = encoders.encode_video_frames([frames[0] for _, frames in batch])
+        for (offset, _), vector in zip(batch, vectors, strict=True):
+            yield Fragment(offset, vector)
 
 
 def load_model(encoders: Encoders, modality: str) -> None:

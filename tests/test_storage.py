@@ -159,6 +159,24 @@ async def test_timed_query_with_offsets_uses_temporal_aggregation():
     assert client.query_points.call_args.kwargs["limit"] == storage.TEMPORAL_CANDIDATES
 
 
+async def test_second_by_second_video_prefers_sequence_over_scattered_better_hits():
+    client = AsyncMock()
+    # Correct film has a one-second alignment jitter. The other film's stronger hits
+    # alternate between shifts 200 and 205: valid for old 10 s windows, not single frames.
+    client.query_points.side_effect = [
+        QueryResponse(
+            points=[
+                timed_hit(2 * i, 603, 120 + i + i % 2, 0.8),
+                timed_hit(2 * i + 1, 550, 200 + i + 5 * (i % 2), 0.9),
+            ]
+        )
+        for i in range(30)
+    ]
+    store = VectorStore(Settings(_env_file=None, score_threshold_video=None), client)
+    assert await store.search("video", [[1.0] * 512] * 30, list(range(30))) == [603]
+    assert client.query_points.await_count == 30
+
+
 @pytest.mark.filterwarnings("ignore:Payload indexes have no effect")
 async def test_collections_search_filter_and_restart(tmp_path):
     path = str(tmp_path / "qdrant")

@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from dejaview_ml.errors import MlError
+from dejaview_ml.video_sampling import VIDEO_FILTER, VIDEO_SEGMENT_FRAMES
 
 MIB = 1024 * 1024
 MAX_IMAGE_PIXELS = Image.MAX_IMAGE_PIXELS or 89_478_485
@@ -168,10 +169,10 @@ def decode_audio(data: bytes, content_type: str, timeout: float) -> np.ndarray:
 
 
 def decode_video(data: bytes, content_type: str, timeout: float) -> list[list[Image.Image]]:
-    """One frame/second; chunks of <=10 frames correspond to <=10-second segments.
+    """One frame per second, returned as separate one-frame segments.
 
     FFmpeg performs bicubic resize and center crop; the model processor only normalizes.
-    This function is shared by query inference and indexing.
+    Sampling and preprocessing match the streaming indexer via VIDEO_FILTER.
     """
     with tempfile.TemporaryDirectory(prefix="dejaview-") as directory:
         path = Path(directory) / ("query" + MEDIA_TYPES["video"][content_type])
@@ -226,8 +227,7 @@ def decode_video(data: bytes, content_type: str, timeout: float) -> list[list[Im
                 "-sn",
                 "-dn",
                 "-vf",
-                "fps=1:round=up,scale=224:224:force_original_aspect_ratio=increase:flags=bicubic,"
-                "crop=224:224",
+                VIDEO_FILTER,
                 "-t",
                 "30",
                 "-f",
@@ -243,6 +243,6 @@ def decode_video(data: bytes, content_type: str, timeout: float) -> list[list[Im
         raise MlError(422, "FILE_CORRUPTED", "video has no valid sampled frames")
     frames = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 224, 224, 3)
     return [
-        [Image.fromarray(frame) for frame in frames[start : start + 10]]
-        for start in range(0, len(frames), 10)
+        [Image.fromarray(frame) for frame in frames[start : start + VIDEO_SEGMENT_FRAMES]]
+        for start in range(0, len(frames), VIDEO_SEGMENT_FRAMES)
     ]

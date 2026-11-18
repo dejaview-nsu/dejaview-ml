@@ -83,6 +83,13 @@ def test_missing_file_is_an_argument_error(tmp_path):
         probe_video(tmp_path / "missing.mp4")
 
 
+def test_video_only_accepts_missing_audio(tmp_path):
+    path = make_video(tmp_path / "silent.mp4", duration=2, audio_codec=None)
+    assert probe_video(path, require_audio=False).audio_stream is None
+    with pytest.raises(UnsuitableFileError, match="нет звуковой дорожки"):
+        probe_video(path)
+
+
 def test_speech_uses_the_audio_track_of_video_indexing(tmp_path):
     path = make_video(tmp_path / "movie.mp4")
     audio = probe_audio(path)
