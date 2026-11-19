@@ -52,8 +52,17 @@ def test_audio_window_contents():
 
 
 def test_expected_counts():
-    assert expected_counts(12) == {"image": 3, "video": 12, "audio": 3}
-    assert expected_counts(6000) == {"image": 1200, "video": 6000, "audio": 1200}
+    assert expected_counts(12) == {"image": 3, "video": 6, "audio": 3}
+    assert expected_counts(6000) == {"image": 1200, "video": 3000, "audio": 1200}
+
+
+@requires_ffmpeg
+@pytest.mark.parametrize("duration, index_offsets, query_count", [(0.2, [0], 1), (2.2, [0, 2], 3)])
+def test_sparse_index_keeps_tail_and_query_stays_one_fps(tmp_path, duration, index_offsets, query_count):
+    source = make_video(tmp_path / "short.mp4", duration=duration)
+    segments = list(video_segments_stream(source, probe_video(source), tmp_path))
+    assert [offset for offset, _ in segments] == index_offsets
+    assert len(decode_video(source.read_bytes(), "video/mp4", 30)) == query_count
 
 
 @requires_ffmpeg
@@ -66,7 +75,7 @@ def test_offsets_of_real_movie(tmp_path):
     assert batches[0].images[0].size == (854, 480)
 
     segments = list(video_segments_stream(source, info, tmp_path))
-    assert [(offset, len(frames)) for offset, frames in segments] == [(i, 1) for i in range(12)]
+    assert [(offset, len(frames)) for offset, frames in segments] == [(i, 1) for i in range(0, 12, 2)]
 
     windows = list(audio_chunks(source, info, tmp_path))
     assert [offset for offset, _ in windows] == [0, 5, 10]
@@ -80,8 +89,9 @@ def test_movie_frames_and_samples_match_query_decoding(tmp_path):
 
     query_segments = decode_video(source.read_bytes(), "video/mp4", 30)
     movie_segments = [frames for _, frames in video_segments_stream(source, info, tmp_path)]
-    assert len(movie_segments) == len(query_segments)
-    for movie_frames, query_frames in zip(movie_segments, query_segments, strict=True):
+    assert len(movie_segments) == 5
+    assert len(query_segments) == 10
+    for movie_frames, query_frames in zip(movie_segments, query_segments[::2], strict=True):
         assert [frame.tobytes() for frame in movie_frames] == [frame.tobytes() for frame in query_frames]
 
     query_waveform = decode_audio(source.read_bytes(), "audio/mp4", 30)
@@ -120,7 +130,7 @@ def test_relative_source_path(tmp_path, monkeypatch):
     source = Path("movie.mp4")
     info = probe_video(source)
     assert [offset for batch in image_batches(source, info, temp_dir) for offset in batch.offsets_sec] == [0, 5]
-    assert [offset for offset, _ in video_segments_stream(source, info, temp_dir)] == list(range(6))
+    assert [offset for offset, _ in video_segments_stream(source, info, temp_dir)] == list(range(0, 6, 2))
     assert [offset for offset, _ in audio_chunks(source, info, temp_dir)] == [0, 5]
 
 
