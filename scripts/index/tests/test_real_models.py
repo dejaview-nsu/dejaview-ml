@@ -44,8 +44,9 @@ def test_video_seconds_match_query_vectors(tmp_path):
     encoders = Encoders(Settings(_env_file=None, device="cpu", local_files_only=True))
     fragments = embed_video(encoders, source, probe_video(source), tmp_path)
     vectors, offsets = encoders.encode_query("video", source.read_bytes(), "video/mp4")
-    assert [fragment.offset_sec for fragment in fragments] == offsets == [0, 1, 2, 3]
-    np.testing.assert_allclose([f.vector for f in fragments], vectors, atol=1e-6)
+    assert [fragment.offset_sec for fragment in fragments] == [0, 2]
+    assert offsets == [0, 1, 2, 3]
+    np.testing.assert_allclose([f.vector for f in fragments], vectors[::2], atol=1e-6)
     assert np.asarray(vectors).shape == (4, 512)
     np.testing.assert_allclose(np.linalg.norm(vectors, axis=1), 1, atol=1e-5)
 
@@ -57,7 +58,7 @@ def test_indexed_fragments_match_queries(tmp_path):
     fragments = embed_movie(encoders, movie, source, probe_video(source), tmp_path)
 
     assert [fragment.offset_sec for fragment in fragments["image"]] == [0, 5, 10, 15, 20]
-    assert [fragment.offset_sec for fragment in fragments["video"]] == list(range(22))
+    assert [fragment.offset_sec for fragment in fragments["video"]] == list(range(0, 22, 2))
     assert [fragment.offset_sec for fragment in fragments["audio"]] == [0, 5, 10, 15, 20]
 
     def similarity(indexed, query):

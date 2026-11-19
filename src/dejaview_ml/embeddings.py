@@ -10,7 +10,7 @@ from PIL import Image
 from dejaview_ml.config import DIMENSIONS, MODEL_IDS, SPEECH_MODEL_ID, Settings
 from dejaview_ml.errors import MlError
 from dejaview_ml.media import decode_audio, decode_image, decode_video, validate_text
-from dejaview_ml.video_sampling import VIDEO_SEGMENT_SEC
+from dejaview_ml.video_sampling import VIDEO_QUERY_SEGMENT_SEC
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,6 @@ AUDIO_RATE = 48_000
 # matches can be checked for consistency in time. Fewer than two windows give nothing to check.
 AUDIO_QUERY_WINDOW_SEC = 5.0
 AUDIO_QUERY_STEP_SEC = 2.5
-VIDEO_QUERY_SEGMENT_SEC = float(VIDEO_SEGMENT_SEC)
 SPEECH_RATE = 16_000
 SPEECH_MAX_TOKENS = 128
 SPEECH_MIN_WORDS = 3
