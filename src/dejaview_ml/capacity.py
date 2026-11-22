@@ -6,7 +6,7 @@ heavy steps (model runs and media decoding) at once, since they share the CPU. A
 finds its model and a slot free runs at once; otherwise it waits for its turn in a short queue:
 no more than `queue_limit` requests wait for one model, and one request waits only until
 `wait_seconds` after it arrived, over all of its steps. Past either limit the request gets
-503 NOT_READY, which the backend may retry. A request whose client has disconnected leaves the
+503 SERVER_BUSY. A request whose client has disconnected leaves the
 queue and does not start a model run.
 """
 
@@ -25,7 +25,7 @@ DISCONNECT_POLL_SECONDS = 0.05
 
 
 def busy() -> MlError:
-    return MlError(503, "NOT_READY", "inference capacity is occupied; retry later")
+    return MlError(503, "SERVER_BUSY", "inference capacity is occupied; retry later")
 
 
 def gone() -> MlError:
