@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.index.video",
-        description="Обновляет только video существующего фильма: один вектор на секунду. "
+        description="Обновляет только video существующего фильма: один вектор каждые две секунды. "
         "Другие коллекции, метаданные и исходный файл сохраняются. Ключ TMDB не нужен.",
     )
     parser.add_argument("file", type=Path, help="полный фильм MP4 (H.264, 480p); звук необязателен")

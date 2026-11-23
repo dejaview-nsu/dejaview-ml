@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from dejaview_ml.errors import MlError
-from dejaview_ml.video_sampling import VIDEO_FILTER, VIDEO_SEGMENT_FRAMES
+from dejaview_ml.video_sampling import VIDEO_QUERY_FILTER, VIDEO_SEGMENT_FRAMES
 
 MIB = 1024 * 1024
 MAX_IMAGE_PIXELS = Image.MAX_IMAGE_PIXELS or 89_478_485
@@ -172,7 +172,7 @@ def decode_video(data: bytes, content_type: str, timeout: float) -> list[list[Im
     """One frame per second, returned as separate one-frame segments.
 
     FFmpeg performs bicubic resize and center crop; the model processor only normalizes.
-    Sampling and preprocessing match the streaming indexer via VIDEO_FILTER.
+    Queries sample at 1 FPS; preprocessing matches the 0.5 FPS streaming indexer.
     """
     with tempfile.TemporaryDirectory(prefix="dejaview-") as directory:
         path = Path(directory) / ("query" + MEDIA_TYPES["video"][content_type])
@@ -227,7 +227,7 @@ def decode_video(data: bytes, content_type: str, timeout: float) -> list[list[Im
                 "-sn",
                 "-dn",
                 "-vf",
-                VIDEO_FILTER,
+                VIDEO_QUERY_FILTER,
                 "-t",
                 "30",
                 "-f",

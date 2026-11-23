@@ -18,7 +18,7 @@ from scripts.index.vectors import VectorWriter
 
 
 def video_fragments(count):
-    return [Fragment(i, [1.0] + [0.0] * 511) for i in range(count)]
+    return [Fragment(2 * i, [1.0] + [0.0] * 511) for i in range(count)]
 
 
 def test_video_update_migrates_old_windows_and_keeps_other_data():
@@ -31,12 +31,12 @@ def test_video_update_migrates_old_windows_and_keeps_other_data():
         writer.replace_movie(603, fragments(3))
         writer.replace_movie(550, fragments(2))
         writer.replace_speech(603, [line(0)])
-        writer.replace_movie(603, {"video": [Fragment(0, [1.0] * 512), Fragment(20, [1.0] * 512)]})
+        writer.replace_movie(603, {"video": [Fragment(i, [1.0] * 512) for i in range(25)]})
         other_collections = {name: client.scroll(name)[0] for name in COLLECTIONS if name != "video"}
         other_movie = movie_points(client, "video", 550)
         for _ in range(2):
             assert writer.update_video(603, video_fragments(12)) == 12
-            assert sorted(p.payload["offset_sec"] for p in movie_points(client, "video", 603)) == list(range(12))
+            assert sorted(p.payload["offset_sec"] for p in movie_points(client, "video", 603)) == list(range(0, 24, 2))
             assert movie_points(client, "video", 550) == other_movie
             assert {name: client.scroll(name)[0] for name in other_collections} == other_collections
 
@@ -134,15 +134,15 @@ def test_only_video_model_is_loaded_and_frames_are_batched(monkeypatch, tmp_path
     frames = [Image.new("RGB", (224, 224), (i, 0, 0)) for i in range(35)]
     monkeypatch.setattr(
         "scripts.index.embedding.video_segments_stream",
-        lambda *args: ((i, [frame]) for i, frame in enumerate(frames)),
+        lambda *args: ((2 * i, [frame]) for i, frame in enumerate(frames)),
     )
     encoders = Mock()
     encoders.encode_video_frames.side_effect = lambda batch: [[float(f.getpixel((0, 0))[0])] for f in batch]
-    info = VideoInfo(35, 0, None, 224, 224, Fraction(1))
+    info = VideoInfo(70, 0, None, 224, 224, Fraction(1))
     result = embed_video(encoders, tmp_path / "movie.mp4", info, tmp_path)
     encoders.load.assert_called_once_with("video")
     assert [len(call.args[0]) for call in encoders.encode_video_frames.call_args_list] == [32, 3]
-    assert [f.offset_sec for f in result] == list(range(35))
+    assert [f.offset_sec for f in result] == list(range(0, 70, 2))
     assert [f.vector for f in result] == [[float(i)] for i in range(35)]
 
 
