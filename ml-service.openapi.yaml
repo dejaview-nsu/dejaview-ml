@@ -245,6 +245,7 @@ components:
             - FILE_CORRUPTED
             - DURATION_TOO_LONG
             - NOT_READY
+            - SERVER_BUSY
             - QDRANT_UNAVAILABLE
             - INTERNAL_ERROR
         message:
@@ -343,6 +344,8 @@ components:
       description: >-
         NOT_READY - модель модальности загружается или выключена; QDRANT_UNAVAILABLE - Qdrant не
         отвечает. Backend отвечает клиенту 503 SEARCH_UNAVAILABLE.
+        SERVER_BUSY - очередь инференса заполнена или истёк срок ожидания.
+        Backend отвечает клиенту 503 SERVER_BUSY.
       content:
         application/json:
           schema:
@@ -358,3 +361,8 @@ components:
               value:
                 code: QDRANT_UNAVAILABLE
                 message: qdrant timeout
+            busy:
+              summary: Инференс перегружен
+              value:
+                code: SERVER_BUSY
+                message: inference capacity is occupied; retry later

@@ -61,7 +61,7 @@ async def test_cpu_slots_limit_models_running_at_once():
     try:
         with pytest.raises(MlError) as error:
             await capacity.run("text", capacity.budget(), lambda: "text")
-        assert (error.value.status, error.value.code) == (503, "NOT_READY")
+        assert (error.value.status, error.value.code) == (503, "SERVER_BUSY")
     finally:
         gate.opened.set()
     await held
@@ -91,8 +91,9 @@ async def test_full_queue_is_rejected_at_once():
     waiting = asyncio.create_task(capacity.run("image", capacity.budget(), lambda: 2))
     await asyncio.sleep(0.05)
     try:
-        with pytest.raises(MlError):
+        with pytest.raises(MlError) as error:
             await asyncio.wait_for(capacity.run("image", capacity.budget(), lambda: 3), 1)
+        assert (error.value.status, error.value.code) == (503, "SERVER_BUSY")
     finally:
         gate.opened.set()
     await held
