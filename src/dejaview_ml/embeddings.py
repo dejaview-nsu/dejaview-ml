@@ -234,7 +234,10 @@ class Encoders:
         import torch.nn.functional as functional
 
         options = {"do_resize": False, "do_center_crop": False} if modality == "video" else {}
-        inputs = self.processors[modality](images=frames, return_tensors="pt", **options)
+        # PIL RGB images have channels last, even when height 1 or 3 is ambiguous.
+        inputs = self.processors[modality](
+            images=frames, return_tensors="pt", input_data_format="channels_last", **options
+        )
         with torch.inference_mode():
             features = self.models[modality](pixel_values=inputs.pixel_values.to(self.device))
             return functional.normalize(features.image_embeds.float(), dim=-1)

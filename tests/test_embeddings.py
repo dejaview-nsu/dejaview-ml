@@ -1,3 +1,5 @@
+import io
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -6,8 +8,12 @@ from dejaview_ml.config import MODEL_IDS, Settings
 from dejaview_ml.embeddings import Encoders
 
 
-@pytest.mark.parametrize("modality", ["image", "video"])
-def test_load_full_clip_checkpoint_as_vision_encoder(tmp_path, monkeypatch, modality):
+@pytest.mark.parametrize(
+    ("modality", "size"),
+    [("image", size) for size in [(224, 224), (1, 1), (1, 16), (16, 1), (3, 16)]]
+    + [("video", (224, 224))],
+)
+def test_load_full_clip_checkpoint_as_vision_encoder(tmp_path, monkeypatch, modality, size):
     """A full CLIP checkpoint must retain its trained vision and projection weights."""
     import torch
     import torch.nn.functional as functional
@@ -41,15 +47,21 @@ def test_load_full_clip_checkpoint_as_vision_encoder(tmp_path, monkeypatch, moda
 
     encoders = Encoders(Settings(_env_file=None, device="cpu", local_files_only=True))
     encoders.load(modality)
-    frame = Image.new("RGB", (224, 224), "orange")
+    frame = Image.new("RGB", size, "orange")
     with torch.inference_mode():
-        inputs = processor(images=[frame], return_tensors="pt")
+        inputs = processor(images=[frame], return_tensors="pt", input_data_format="channels_last")
         pooled = reference.vision_model(pixel_values=inputs.pixel_values).pooler_output
         expected = functional.normalize(reference.visual_projection(pooled), dim=-1)[0].numpy()
     actual = encoders._encode_frames(modality, [frame])
     assert encoders.states[modality] == "ready"
     assert len(actual) == 512
     np.testing.assert_allclose(actual, expected, atol=1e-6)
+    if modality == "image":
+        data = io.BytesIO()
+        frame.save(data, format="PNG")
+        vectors, offsets = encoders.encode_query("image", data.getvalue(), "image/png")
+        assert offsets == [0.0]
+        np.testing.assert_allclose(vectors, [expected], atol=1e-6)
     if modality == "video":
         frames = [frame, Image.new("RGB", (224, 224), "blue")]
         batch = encoders.encode_video_frames(frames)
